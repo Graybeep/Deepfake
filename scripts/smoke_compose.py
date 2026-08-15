@@ -106,7 +106,61 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         sys.exit(1)
 
 
+def _post_grant(grant, payload: bytes, content_type: str) -> int:
+    """POST a payload against a presigned grant, returning the HTTP status."""
+    body, ct = _multipart(grant.fields, payload, content_type)
+    req = urllib.request.Request(
+        grant.url, data=body, method="POST", headers={"Content-Type": ct}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def probe_size_cap(storage) -> None:
+    """Prove object storage actually enforces content-length-range.
+
+    Deliberately out-of-band: the grant is minted by calling presign_upload
+    directly with a small bound, never through the gateway. The gateway's cap
+    is a fixed Tier 1 value that no caller gets to vary -- adding a
+    "smaller cap for testing" parameter would punch a hole in precisely the
+    limit this check defends, and test-only exceptions to a security boundary
+    have a poor record of staying test-only.
+
+    The property under test is "does storage honour the condition", not "does
+    it honour it at exactly DF_MAX_UPLOAD_BYTES", so a small bound tests it
+    exactly as well and runs on every smoke run rather than only when someone
+    remembers to lower .env.
+
+    Both halves are required. Without the accepted case, a rejection would
+    only prove the grant was broken somehow -- not that the bound was what
+    stopped it.
+    """
+    bound = 1024
+    ctype = "application/octet-stream"
+    key = f"probe/size-cap-{secrets.token_hex(8)}"
+
+    under = _post_grant(storage.presign_upload(key, ctype, bound), b"u" * (bound // 2), ctype)
+    check("storage accepts a body within the signed bound", 200 <= under < 300, str(under))
+    check("...and the object landed", storage.exists(key))
+    storage.delete_object(key)
+
+    over = _post_grant(storage.presign_upload(key, ctype, bound), b"o" * (bound + 1), ctype)
+    check("storage rejects a body over the signed bound", over in (400, 403), str(over))
+    check("rejected body left nothing in the bucket", not storage.exists(key))
+
+
 def main() -> int:
+    from df.config import settings
+    from df.storage import S3Storage
+
+    # One client for the out-of-band cap probe and the later bucket
+    # assertions. Points at the public endpoint because this script runs on
+    # the host, outside the compose network.
+    storage = S3Storage(endpoint=settings.s3_public_endpoint)
+
     print(f"gateway: {GATEWAY}\n")
 
     status, health = _req("GET", "/healthz")
@@ -136,25 +190,8 @@ def main() -> int:
 
     # 2b. the size cap is a signed condition, not a client-side promise. These
     # bytes never pass through the gateway, so if storage does not reject an
-    # oversized body nothing else will.
-    over = b"x" * (job["max_bytes"] + 1) if job["max_bytes"] < 8 * 1024**2 else None
-    if over is not None:
-        _, big_job = _req(
-            "POST", "/v1/jobs", {"media_type": "video", "content_type": "video/mp4"}
-        )
-        body, content_type = _multipart(big_job["upload_fields"], over, "video/mp4")
-        req = urllib.request.Request(
-            big_job["upload_url"], data=body, method="POST",
-            headers={"Content-Type": content_type},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                check("oversized upload rejected by storage", False, f"accepted {resp.status}")
-        except urllib.error.HTTPError as exc:
-            check("oversized upload rejected by storage", exc.code in (400, 403), str(exc.code))
-    else:
-        print(f"SKIP  oversized-upload check -- max_bytes is {job['max_bytes']}, "
-              f"too large to probe cheaply")
+    # oversized body nothing else will. Probed out-of-band -- see probe_size_cap.
+    probe_size_cap(storage)
 
     # 3. notify -> enqueue
     status, ack = _req("POST", f"/v1/jobs/{job_id}/uploaded")
@@ -226,10 +263,6 @@ def main() -> int:
     )
 
     # 7. media really is gone from the bucket, not just flagged in Postgres
-    from df.config import settings
-    from df.storage import S3Storage
-
-    storage = S3Storage(endpoint=settings.s3_public_endpoint)
     check(
         "raw upload absent from bucket",
         not storage.exists(f"raw/{job_id}/original"),
