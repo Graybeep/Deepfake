@@ -1,0 +1,11 @@
+# Base runtime deps (gateway, cpu-preprocess, router).
+# Heavy ML deps live in requirements-ml.txt so the CPU/gateway images stay small
+# and the local test run stays fast.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+psycopg[binary]==3.2.3
+redis==5.2.1
+boto3==1.35.90
+numpy==2.2.1
+python-json-logger==3.2.1

@@ -1,0 +1,24 @@
+# GPU passthrough overlay.
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# Kept out of the base file so `docker compose up` still works on a laptop --
+# the whole pipeline runs on CPU with DF_INFERENCE_BACKEND=stub.
+#
+# PREREQUISITE, separate from installing Docker Desktop: the WSL2-enabled NVIDIA
+# driver installs on the WINDOWS HOST, never inside the WSL distro. Verify the
+# chain before relying on this file -- not on the day the weights land:
+#     wsl nvidia-smi
+#     docker run --rm --gpus all nvidia/cuda:12.4.0-base nvidia-smi
+# If the second command fails, this overlay will fail too, and the failure will
+# look like a compose problem rather than a driver one.
+services:
+  gpu-inference:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

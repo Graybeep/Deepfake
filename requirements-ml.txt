@@ -1,0 +1,9 @@
+# GPU-inference image only.
+# NOTE: no real EfficientNet weights are vendored in this repo yet. The default
+# inference backend is `stub` (see src/df/inference/). Installing these packages
+# does not by itself make the detector real -- see DECISIONS.md.
+-r requirements.txt
+torch==2.5.1
+torchvision==0.20.1
+opencv-python-headless==4.10.0.84
+librosa==0.10.2.post1

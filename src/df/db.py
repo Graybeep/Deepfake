@@ -1,0 +1,290 @@
+"""Postgres access. The job row is the audit trail, so every write that changes
+a verdict also writes hash / model_version_id / aggregation method + params.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+import psycopg
+from psycopg.rows import dict_row
+
+from df.config import settings
+from df.retention import RetentionRow
+
+
+class Db:
+    def __init__(self, dsn: str | None = None) -> None:
+        self.dsn = dsn or settings.pg_dsn
+
+    @contextmanager
+    def conn(self) -> Iterator[psycopg.Connection]:
+        with psycopg.connect(self.dsn, row_factory=dict_row) as c:
+            yield c
+
+    # --- job lifecycle -----------------------------------------------------
+
+    def create_job(
+        self, *, media_type: str, raw_object_key: str, derived_prefix: str, submitted_by: str
+    ) -> str:
+        with self.conn() as c, c.transaction():
+            row = c.execute(
+                """
+                INSERT INTO jobs (media_type, status, raw_object_key, derived_prefix, submitted_by)
+                VALUES (%s, 'awaiting_upload', %s, %s, %s)
+                RETURNING id
+                """,
+                (media_type, raw_object_key, derived_prefix, submitted_by),
+            ).fetchone()
+            return str(row["id"])
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with self.conn() as c:
+            return c.execute("SELECT * FROM jobs WHERE id = %s", (job_id,)).fetchone()
+
+    def set_status(self, job_id: str, status: str, *, error: str | None = None) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                """
+                UPDATE jobs
+                   SET status = %s,
+                       error = COALESCE(%s, error),
+                       updated_at = now()
+                 WHERE id = %s
+                """,
+                (status, error, job_id),
+            )
+
+    def set_content_hash(self, job_id: str, content_hash: str) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                "UPDATE jobs SET content_hash = %s, updated_at = now() WHERE id = %s",
+                (content_hash, job_id),
+            )
+
+    def bump_attempts(self, job_id: str) -> int:
+        with self.conn() as c, c.transaction():
+            row = c.execute(
+                "UPDATE jobs SET attempts = attempts + 1, updated_at = now() "
+                "WHERE id = %s RETURNING attempts",
+                (job_id,),
+            ).fetchone()
+            return int(row["attempts"]) if row else 0
+
+    def insert_items(self, job_id: str, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        with self.conn() as c, c.transaction():
+            c.executemany(
+                """
+                INSERT INTO job_items
+                    (job_id, item_index, item_kind, face_index, score, confidence, object_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        job_id,
+                        i["item_index"],
+                        i["item_kind"],
+                        i.get("face_index"),
+                        i["score"],
+                        i["confidence"],
+                        i.get("object_key"),
+                    )
+                    for i in items
+                ],
+            )
+
+    def get_items(self, job_id: str) -> list[dict[str, Any]]:
+        with self.conn() as c:
+            return c.execute(
+                """
+                SELECT item_index, item_kind, face_index, score, confidence, object_key
+                  FROM job_items WHERE job_id = %s ORDER BY item_index, face_index
+                """,
+                (job_id,),
+            ).fetchall()
+
+    def write_result(
+        self,
+        job_id: str,
+        *,
+        result_class: str,
+        band: str,
+        aggregate_score: float | None,
+        model_version_id: str,
+        aggregation_method: str,
+        aggregation_params: dict,
+        item_count: int,
+        face_count: int | None,
+    ) -> None:
+        """Single write that makes a job's verdict reproducible.
+
+        Score, model version, and aggregation params land together -- a row with
+        a score but no model_version_id is an unauditable result.
+        """
+        with self.conn() as c, c.transaction():
+            c.execute(
+                """
+                UPDATE jobs
+                   SET result_class = %s,
+                       band = %s,
+                       aggregate_score = %s,
+                       model_version_id = %s,
+                       aggregation_method = %s,
+                       aggregation_params = %s,
+                       item_count = %s,
+                       face_count = %s,
+                       status = 'complete',
+                       completed_at = now(),
+                       updated_at = now()
+                 WHERE id = %s
+                """,
+                (
+                    result_class,
+                    band,
+                    aggregate_score,
+                    model_version_id,
+                    aggregation_method,
+                    json.dumps(aggregation_params),
+                    item_count,
+                    face_count,
+                    job_id,
+                ),
+            )
+
+    def flag_for_review(self, job_id: str, reason: str, urgency: str = "normal") -> None:
+        """Tier 3 substitute for the human-in-the-loop dashboard."""
+        with self.conn() as c, c.transaction():
+            c.execute(
+                "INSERT INTO review_flags (job_id, reason, urgency) VALUES (%s, %s, %s)",
+                (job_id, reason, urgency),
+            )
+
+    # --- RetentionStore ----------------------------------------------------
+
+    def get_retention_row(self, job_id: str) -> RetentionRow | None:
+        with self.conn() as c:
+            r = c.execute(
+                """
+                SELECT id, retention_hold, raw_object_key, derived_prefix,
+                       raw_deleted_at, derived_deleted_at,
+                       cold_prefix, cold_deleted_at, extended_retention_until
+                  FROM jobs WHERE id = %s
+                """,
+                (job_id,),
+            ).fetchone()
+        if r is None:
+            return None
+        return RetentionRow(
+            job_id=str(r["id"]),
+            retention_hold=r["retention_hold"],
+            raw_object_key=r["raw_object_key"],
+            derived_prefix=r["derived_prefix"],
+            raw_deleted_at=r["raw_deleted_at"],
+            derived_deleted_at=r["derived_deleted_at"],
+            cold_prefix=r["cold_prefix"],
+            cold_deleted_at=r["cold_deleted_at"],
+            extended_retention_until=r["extended_retention_until"],
+        )
+
+    def mark_media_deleted(
+        self, job_id: str, *, raw: bool, derived: bool, at: dt.datetime
+    ) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                """
+                UPDATE jobs
+                   SET raw_deleted_at     = CASE WHEN %s THEN COALESCE(raw_deleted_at, %s)
+                                                 ELSE raw_deleted_at END,
+                       derived_deleted_at = CASE WHEN %s THEN COALESCE(derived_deleted_at, %s)
+                                                 ELSE derived_deleted_at END,
+                       updated_at = now()
+                 WHERE id = %s
+                """,
+                (raw, at, derived, at, job_id),
+            )
+
+    def mark_cold_deleted(self, job_id: str, at: dt.datetime) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                "UPDATE jobs SET cold_deleted_at = COALESCE(cold_deleted_at, %s), "
+                "updated_at = now() WHERE id = %s",
+                (at, job_id),
+            )
+
+    def set_extended_retention(
+        self, job_id: str, until: dt.datetime, *, cold_prefix: str
+    ) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                """
+                UPDATE jobs
+                   SET extended_retention_until = %s, cold_prefix = %s, updated_at = now()
+                 WHERE id = %s
+                """,
+                (until, cold_prefix, job_id),
+            )
+
+    def set_retention_hold(self, job_id: str, *, reason: str) -> None:
+        """Set the hold flag. Nothing in the MVP calls this automatically --
+        the flag exists and is checked before any code path can set it."""
+        with self.conn() as c, c.transaction():
+            c.execute(
+                """
+                UPDATE jobs
+                   SET retention_hold = TRUE, hold_set_at = now(),
+                       hold_reason = %s, updated_at = now()
+                 WHERE id = %s
+                """,
+                (reason, job_id),
+            )
+
+    def record_event(self, job_id: str, event: str, detail: dict) -> None:
+        with self.conn() as c, c.transaction():
+            c.execute(
+                "INSERT INTO job_events (job_id, event, detail) VALUES (%s, %s, %s)",
+                (job_id, event, json.dumps(detail)),
+            )
+
+    def find_undeleted_completed(self, limit: int = 100) -> list[str]:
+        with self.conn() as c:
+            rows = c.execute(
+                """
+                SELECT id FROM jobs
+                 WHERE completed_at IS NOT NULL
+                   AND retention_hold = FALSE
+                   AND (raw_deleted_at IS NULL OR derived_deleted_at IS NULL)
+                 ORDER BY completed_at
+                 LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+        return [str(r["id"]) for r in rows]
+
+    def find_expired_extended_retention(
+        self, now: dt.datetime, limit: int = 100
+    ) -> list[str]:
+        """Jobs whose fixed window has run out and whose cold media is still there.
+
+        Held jobs are excluded here as well as inside expire_extended_retention()
+        -- belt and braces, because this is the query that decides what gets
+        offered up for deletion in the first place.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                """
+                SELECT id FROM jobs
+                 WHERE cold_prefix IS NOT NULL
+                   AND cold_deleted_at IS NULL
+                   AND retention_hold = FALSE
+                   AND extended_retention_until IS NOT NULL
+                   AND extended_retention_until <= %s
+                 ORDER BY extended_retention_until
+                 LIMIT %s
+                """,
+                (now, limit),
+            ).fetchall()
+        return [str(r["id"]) for r in rows]
