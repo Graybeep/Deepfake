@@ -1,8 +1,12 @@
 """Public API.
 
-Ingest is presigned-upload only: the client PUTs bytes straight to S3 and the
-API never proxies media (Tier 1). The API's job is to mint the URL, rate-limit
-who may mint one, and report status.
+Ingest is presigned-upload only: the client POSTs bytes straight to S3 and the
+API never proxies media (Tier 1). The API's job is to mint the grant,
+rate-limit who may mint one, and report status.
+
+The grant is a POST policy, not a PUT URL, so the size cap is a signed
+condition enforced by object storage. Since the bytes never reach the gateway,
+a PUT grant would make DF_MAX_UPLOAD_BYTES unenforceable.
 """
 from __future__ import annotations
 
@@ -80,7 +84,11 @@ class CreateJobRequest(BaseModel):
 class CreateJobResponse(BaseModel):
     job_id: str
     upload_url: str
-    upload_method: str = "PUT"
+    upload_method: str = "POST"
+    # Policy fields the client must send as form parts, before the file part.
+    # They carry the signature and the content-length-range condition, so the
+    # upload is size-capped by object storage rather than on the client's word.
+    upload_fields: dict[str, str] = Field(default_factory=dict)
     expires_in_seconds: int
     max_bytes: int
     notify_url: str
@@ -109,13 +117,15 @@ def create_job(body: CreateJobRequest, request: Request) -> CreateJobResponse:
             (raw_key, derived, job_id),
         )
 
-    url = _storage.presign_put(raw_key, body.content_type, settings.max_upload_bytes)
+    grant = _storage.presign_upload(raw_key, body.content_type, settings.max_upload_bytes)
     _status.publish(job_id, "awaiting_upload")
     _db.record_event(job_id, "job.created", {"media_type": body.media_type, "by": ident})
 
     return CreateJobResponse(
         job_id=job_id,
-        upload_url=url,
+        upload_url=grant.url,
+        upload_method=grant.method,
+        upload_fields=grant.fields,
         expires_in_seconds=settings.presign_ttl_seconds,
         max_bytes=settings.max_upload_bytes,
         notify_url=f"/v1/jobs/{job_id}/uploaded",

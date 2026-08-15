@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import secrets
 import sys
 import time
 import urllib.error
@@ -42,6 +43,29 @@ def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
         return exc.code, {"error": exc.read().decode()}
 
 
+def _multipart(fields: dict, payload: bytes, content_type: str) -> tuple[bytes, str]:
+    """Encode an S3 POST-policy upload.
+
+    The file part must come last -- S3 ignores any form field that follows it,
+    which would silently drop the policy and signature.
+    """
+    boundary = "----dfsmoke" + secrets.token_hex(12)
+    out = bytearray()
+    for name, value in fields.items():
+        out += (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+        ).encode()
+    out += (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="upload.bin"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    out += payload
+    out += f"\r\n--{boundary}--\r\n".encode()
+    return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"{'PASS' if ok else 'FAIL'}  {label}{(' -- ' + detail) if detail else ''}")
     if not ok:
@@ -66,14 +90,37 @@ def main() -> int:
 
     # 2. upload straight to object storage, bypassing the API
     payload = b"smoke-test-media-bytes" * 512
-    put = urllib.request.Request(
-        upload_url, data=payload, method="PUT", headers={"Content-Type": "video/mp4"}
+    body, content_type = _multipart(job["upload_fields"], payload, "video/mp4")
+    post = urllib.request.Request(
+        upload_url, data=body, method="POST", headers={"Content-Type": content_type}
     )
     try:
-        with urllib.request.urlopen(put, timeout=60) as resp:
+        with urllib.request.urlopen(post, timeout=60) as resp:
             check("presigned upload accepted", 200 <= resp.status < 300, str(resp.status))
     except urllib.error.HTTPError as exc:
         check("presigned upload accepted", False, f"{exc.code} {exc.read()[:200]!r}")
+
+    # 2b. the size cap is a signed condition, not a client-side promise. These
+    # bytes never pass through the gateway, so if storage does not reject an
+    # oversized body nothing else will.
+    over = b"x" * (job["max_bytes"] + 1) if job["max_bytes"] < 8 * 1024**2 else None
+    if over is not None:
+        _, big_job = _req(
+            "POST", "/v1/jobs", {"media_type": "video", "content_type": "video/mp4"}
+        )
+        body, content_type = _multipart(big_job["upload_fields"], over, "video/mp4")
+        req = urllib.request.Request(
+            big_job["upload_url"], data=body, method="POST",
+            headers={"Content-Type": content_type},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                check("oversized upload rejected by storage", False, f"accepted {resp.status}")
+        except urllib.error.HTTPError as exc:
+            check("oversized upload rejected by storage", exc.code in (400, 403), str(exc.code))
+    else:
+        print(f"SKIP  oversized-upload check -- max_bytes is {job['max_bytes']}, "
+              f"too large to probe cheaply")
 
     # 3. notify -> enqueue
     status, ack = _req("POST", f"/v1/jobs/{job_id}/uploaded")

@@ -38,7 +38,15 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
 - TTL-delete on raw video/face crops, triggered on inference completion. Every delete
   call checks the hold-flag column first — build the flag column and the check in the
   same commit as the delete path, before anything sets it true.
-- Presigned S3 uploads, bypass API for large files.
+- Presigned S3 uploads, bypass API for large files. The signature is bound to the
+  exact host used at signing time — swapping the hostname in a generated URL breaks
+  it. Use two client configs: an internal one for server-side calls, a separate one
+  pointed at whatever host/port the browser can actually reach, used only for
+  presigned-post. It must be a POST policy, not a PUT URL: a presigned PUT signs the
+  URL and not the body length, so it is an unbounded write to the bucket. These bytes
+  never traverse the gateway — ingress rate limiting never sees them — so a
+  `content-length-range` condition in the policy is the only place
+  DF_MAX_UPLOAD_BYTES can be enforced at all.
 - Rate limiting on ingress.
 - Postgres job row: hash + model_version_id + aggregation method/params. This is the
   whole audit trail — treat it as such.
@@ -84,13 +92,17 @@ GPU-inference pod specifically — that's the cost driver — managed or PVC-bac
 Postgres/Redis.
 GPU passthrough is a separate prerequisite from installing Docker Desktop — the
 WSL2-enabled NVIDIA driver installs on the Windows host, never inside the WSL distro.
-Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
+`nvidia-container-toolkit` is the Linux-side piece — installs via `apt` inside the
+WSL distro (Ubuntu), not on Windows; it needs a distro to live in, it doesn't replace
+one. Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
 before wiring the torch backend into compose — not on the day the weights land.
-Both gates verified 2026-08-15 on the dev box: driver 610.43.02 visible in WSL and
-inside a `--gpus all` container, Docker Desktop 4.86.0 / engine 29.7.2. The card is an
-RTX 4060 Laptop with 8 GB VRAM — that ceiling, not throughput, is what binds first,
-since the face and audio models are separate model_version_ids and may be co-resident.
-Size batch and residency against 8 GB before the weights land.
+MinIO's official image dropped curl — a healthcheck written as `curl -f .../health/live`
+fails immediately regardless of whether MinIO is actually up. Use `mc ready local`.
+
+## Before any push to a public remote
+Run a secrets scan (`gitleaks detect --source . -v` or trufflehog) against full git
+history, not just the working tree — deleting a credential in a later commit doesn't
+remove it from a history that's already public. Do this before publishing, not after.
 
 ## Platform
 Web app, not native. Presigned S3 + WebSocket are already web-native. No stated
@@ -105,17 +117,8 @@ a 5-day timeline. Revisit only if one becomes a real requirement.
   better than nothing, but compliance is a legal determination this codebase doesn't
   get to assert.
 
-## Testing status
-TTL deletion is asserted against the storage backend, not a mock's call log — good,
-keep it that way. The hold-flag gap is closed: `tests/test_retention_hold_gate.py`
-covers all three delete triggers that can touch preserved media — completion
-(`delete_media_for_job`), crash recovery (`sweep_undeleted`), and cold-storage expiry
-(`expire_extended_retention`, both directly and via `sweep_expired_windows`) — each
-tested held and unheld, asserting on the face crops themselves rather than the job row.
-The unheld half matters as much as the held half: a test that only checked the held
-case would also pass against a delete path that was simply broken.
-
-Open: `tests/test_end_to_end.py` cannot be collected without `psycopg` installed, so
-the end-to-end path is currently unexercised locally. That is an environment gap, not
-a code defect — but it means "the suite is green" is a claim about 83 tests, not all
-of them. Don't quote it as full coverage until e2e actually runs.
+## Testing gap to close
+TTL deletion is now asserted against the storage backend, not a mock's call log —
+good, keep it that way. Still needed: a test that the hold-flag gate blocks deletion
+specifically for the flagged media (not just the job row), covering every delete
+trigger that can touch it, not only the primary completion-triggered path.

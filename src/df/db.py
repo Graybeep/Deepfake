@@ -76,8 +76,11 @@ class Db:
     def insert_items(self, job_id: str, items: list[dict[str, Any]]) -> None:
         if not items:
             return
-        with self.conn() as c, c.transaction():
-            c.executemany(
+        # executemany is a cursor method in psycopg3; Connection only has
+        # execute(). Every other method here happens to use execute(), which is
+        # why this was the one path that broke against a real database.
+        with self.conn() as c, c.transaction(), c.cursor() as cur:
+            cur.executemany(
                 """
                 INSERT INTO job_items
                     (job_id, item_index, item_kind, face_index, score, confidence, object_key)

@@ -8,14 +8,34 @@ tests/test_retention_ttl.py.
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from df.config import settings
 
 
+@dataclass(frozen=True)
+class PresignedUpload:
+    """A browser-usable upload grant.
+
+    POST rather than PUT because a presigned PUT cannot express a size limit:
+    the signature covers the URL, not the body length, so a PUT grant is an
+    unbounded write to the bucket. A POST policy carries a
+    content-length-range condition that the storage backend itself enforces
+    and rejects, which matters because Tier 1 sends large uploads straight
+    past the API -- ingress rate limiting never sees these bytes.
+    """
+
+    url: str
+    fields: dict[str, str] = field(default_factory=dict)
+    method: str = "POST"
+
+
 @runtime_checkable
 class Storage(Protocol):
-    def presign_put(self, key: str, content_type: str, max_bytes: int) -> str: ...
+    def presign_upload(
+        self, key: str, content_type: str, max_bytes: int
+    ) -> PresignedUpload: ...
     def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None: ...
     def get_bytes(self, key: str) -> bytes: ...
     def exists(self, key: str) -> bool: ...
@@ -32,8 +52,11 @@ class InMemoryStorage:
         self._objects: dict[str, bytes] = {}
         self._lock = threading.Lock()
 
-    def presign_put(self, key: str, content_type: str, max_bytes: int) -> str:
-        return f"memory://{key}?content_type={content_type}&max_bytes={max_bytes}"
+    def presign_upload(self, key: str, content_type: str, max_bytes: int) -> PresignedUpload:
+        return PresignedUpload(
+            url=f"memory://{key}",
+            fields={"key": key, "Content-Type": content_type, "x-max-bytes": str(max_bytes)},
+        )
 
     def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         with self._lock:
@@ -99,13 +122,25 @@ class S3Storage:
             config=cfg,
         )
 
-    def presign_put(self, key: str, content_type: str, max_bytes: int) -> str:
+    def presign_upload(self, key: str, content_type: str, max_bytes: int) -> PresignedUpload:
         # Tier 1: large files bypass the API entirely and go straight to S3.
-        return self._public_client.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": self.bucket, "Key": key, "ContentType": content_type},
+        # Signed on the PUBLIC client -- the host is part of the signature, so a
+        # URL signed against the internal `minio` name is unusable by a browser.
+        #
+        # content-length-range is the only thing standing between an issued
+        # grant and an unbounded write: these bytes never traverse the gateway,
+        # so DF_MAX_UPLOAD_BYTES cannot be enforced anywhere else.
+        post = self._public_client.generate_presigned_post(
+            Bucket=self.bucket,
+            Key=key,
+            Fields={"Content-Type": content_type},
+            Conditions=[
+                {"Content-Type": content_type},
+                ["content-length-range", 1, max_bytes],
+            ],
             ExpiresIn=settings.presign_ttl_seconds,
         )
+        return PresignedUpload(url=post["url"], fields=post["fields"])
 
     def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
