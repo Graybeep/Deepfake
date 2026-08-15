@@ -117,8 +117,26 @@ a 5-day timeline. Revisit only if one becomes a real requirement.
   better than nothing, but compliance is a legal determination this codebase doesn't
   get to assert.
 
-## Testing gap to close
-TTL deletion is now asserted against the storage backend, not a mock's call log —
-good, keep it that way. Still needed: a test that the hold-flag gate blocks deletion
-specifically for the flagged media (not just the job row), covering every delete
-trigger that can touch it, not only the primary completion-triggered path.
+## Testing status
+TTL deletion is asserted against the storage backend, not a mock's call log — good,
+keep it that way. The hold-flag gap is closed: `tests/test_retention_hold_gate.py`
+covers all three delete triggers that can touch preserved media — completion
+(`delete_media_for_job`), crash recovery (`sweep_undeleted`), and cold-storage expiry
+(`expire_extended_retention`, both directly and via `sweep_expired_windows`) — each
+tested held and unheld, asserting on the face crops rather than the job row. The
+unheld half earns its place: a test that only checked the held case would also pass
+against a delete path that was simply broken.
+
+Two gaps remain, both about what an in-process suite structurally cannot see:
+- Every test runs against `FakeDb`, which does not mirror psycopg3's
+  Connection/Cursor split. That is precisely how `insert_items` shipped calling
+  `executemany` on a Connection — dead-lettering every job against a real database
+  while the suite stayed green. A passing pytest run is not evidence the DB layer
+  works.
+- The presigned upload size cap is enforced by object storage.
+  `tests/test_presign_policy.py` proves the code still asks for the
+  `content-length-range` condition; only `scripts/smoke_compose.py` proves storage
+  honours it. Nothing in pytest can.
+
+So: run `scripts/smoke_compose.py` against a live stack before treating "the tests
+pass" as "the system works."
