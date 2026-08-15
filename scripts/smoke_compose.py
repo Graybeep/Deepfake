@@ -1,8 +1,16 @@
 """End-to-end smoke test against a running docker-compose stack.
 
 Exercises the real thing the in-process tests cannot: presigned upload to
-object storage, the queue between containers, the WebSocket, and whether the
-media is actually gone from the bucket afterwards.
+object storage, the queue between containers, the WebSocket, whether the media
+is actually gone from the bucket afterwards, and whether the audit trail is
+really in Postgres -- read back from the columns, not taken from the API
+response that the same process just produced.
+
+That last part is not belt-and-braces. Every in-process test runs against
+FakeDb, which cannot reproduce psycopg3's Connection/Cursor split, so a DB
+write path can be broken while the whole suite stays green. It already
+happened once: insert_items called executemany on a Connection and
+dead-lettered every job.
 
     docker compose up --build -d
     python scripts/smoke_compose.py
@@ -16,6 +24,7 @@ import json
 import os
 import pathlib
 import secrets
+import subprocess
 import sys
 import time
 import urllib.error
@@ -41,6 +50,31 @@ def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
             return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
         return exc.code, {"error": exc.read().decode()}
+
+
+def _psql(sql: str) -> list[list[str]]:
+    """Run a query against the real Postgres and return raw rows.
+
+    Reached via `compose exec` rather than a published port: postgres sits on
+    the `internal` network deliberately (docker-compose.yml), and punching a
+    host port through just to test would weaken the thing being tested.
+
+    This exists because the API response is produced by the same process that
+    wrote the row, so checking it proves only that the process is
+    self-consistent. Reading the columns back is what catches a DB-layer
+    regression -- insert_items calling executemany on a psycopg3 Connection got
+    all the way to a live stack precisely because every in-process test runs
+    against FakeDb.
+    """
+    proc = subprocess.run(
+        ["docker", "compose", "exec", "-T", "postgres", "psql",
+         "-U", "deepfake", "-d", "deepfake", "-t", "-A", "-F", "\x1f", "-c", sql],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(pathlib.Path(__file__).resolve().parents[1]),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"psql failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    return [ln.split("\x1f") for ln in proc.stdout.strip().splitlines() if ln]
 
 
 def _multipart(fields: dict, payload: bytes, content_type: str) -> tuple[bytes, str]:
@@ -147,6 +181,42 @@ def main() -> int:
     check("aggregation method recorded", bool(doc.get("aggregation_method")))
     check("aggregation params recorded", bool(doc.get("aggregation_params")))
     check("a verdict was reached", doc.get("result_class") is not None)
+
+    # 5b. the audit trail as Postgres actually holds it, not as the API
+    # describes it. job_id is a UUID minted by our own API, so interpolating it
+    # is safe here.
+    rows = _psql(
+        "SELECT content_hash, model_version_id, aggregation_method, "
+        "aggregation_params::text, status "
+        f"FROM jobs WHERE id = '{job_id}';"
+    )
+    check("job row readable from postgres", len(rows) == 1, f"{len(rows)} rows")
+    db_hash, db_model, db_method, db_params, db_status = rows[0]
+
+    check("db status is complete", db_status == "complete", db_status)
+    check("db content_hash agrees with the API", db_hash == doc.get("content_hash"), db_hash)
+    check("db content_hash is a sha256", len(db_hash) == 64, f"len={len(db_hash)}")
+    check("db model_version_id recorded", bool(db_model), repr(db_model))
+    check("db aggregation_method recorded", bool(db_method), repr(db_method))
+    try:
+        parsed = json.loads(db_params)
+    except (ValueError, TypeError):
+        parsed = None
+    check("db aggregation_params is usable json", isinstance(parsed, dict) and bool(parsed),
+          repr(db_params)[:80])
+
+    # The write path that shipped broken. A green pytest run cannot see this:
+    # FakeDb has no Connection/Cursor split to get wrong.
+    counts = _psql(
+        "SELECT count(*), count(score), count(confidence) "
+        f"FROM job_items WHERE job_id = '{job_id}';"
+    )
+    total, scored, confident = (int(v) for v in counts[0])
+    # total == 0 means insert_items wrote nothing.
+    check("per-item scores written to postgres", total > 0, f"{total} rows")
+    check("every item row carries a score", scored == total, f"{scored}/{total}")
+    check("every item row carries a confidence", confident == total, f"{confident}/{total}")
+    print(f"      {total} job_items rows written\n")
 
     # 6. Tier 1
     check("media reported deleted", doc.get("media_deleted") is True, str(doc.get("media_deleted")))
