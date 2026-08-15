@@ -109,7 +109,7 @@ def test_delete_only_touches_its_own_job(store, storage, seeded_job):
 def test_sweeper_deletes_media_the_completion_path_missed(store, storage, seeded_job):
     """Simulates a router crash between writing the verdict and deleting bytes."""
     job_id, raw, derived = seeded_job("job-orphan")
-    store.completed_undeleted = [job_id]
+    store.terminal_undeleted = [job_id]
 
     reports = sweep_undeleted(store, storage)
 
@@ -120,7 +120,7 @@ def test_sweeper_deletes_media_the_completion_path_missed(store, storage, seeded
 
 def test_sweeper_respects_the_hold_flag(store, storage, seeded_job):
     job_id, raw, _ = seeded_job("job-orphan-held", hold=True)
-    store.completed_undeleted = [job_id]
+    store.terminal_undeleted = [job_id]
 
     reports = sweep_undeleted(store, storage)
 

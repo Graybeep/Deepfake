@@ -80,7 +80,7 @@ def test_without_hold_completion_delete_clears_working_copies(store, storage, fl
 
 def test_hold_blocks_sweeper_delete_of_preserved_media(store, storage, flagged):
     job_id, raw, _, preserved = flagged("job-hold-2", hold=True)
-    store.completed_undeleted = [job_id]
+    store.terminal_undeleted = [job_id]
 
     reports = sweep_undeleted(store, storage)
 
@@ -91,7 +91,7 @@ def test_hold_blocks_sweeper_delete_of_preserved_media(store, storage, flagged):
 
 def test_without_hold_sweeper_clears_working_copies(store, storage, flagged):
     job_id, raw, derived, preserved = flagged("job-nohold-2", hold=False)
-    store.completed_undeleted = [job_id]
+    store.terminal_undeleted = [job_id]
 
     reports = sweep_undeleted(store, storage)
 
@@ -175,7 +175,7 @@ def test_expiry_of_one_job_leaves_another_jobs_preserved_media(store, storage, f
 def test_every_delete_trigger_records_why_it_skipped(store, storage, flagged):
     """A held job that was never deleted must be able to prove the gate fired."""
     job_id, _, _, _ = flagged("job-audit", hold=True)
-    store.completed_undeleted = [job_id]
+    store.terminal_undeleted = [job_id]
 
     delete_media_for_job(job_id, store, storage)
     sweep_undeleted(store, storage)

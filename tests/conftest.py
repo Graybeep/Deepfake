@@ -20,7 +20,11 @@ class FakeRetentionStore:
         self.rows: dict[str, RetentionRow] = {}
         self.events: list[tuple[str, str, dict]] = []
         self.extended: dict[str, dt.datetime] = {}
-        self.completed_undeleted: list[str] = []
+        # Jobs that reached a terminal state (complete, dead_letter, failed)
+        # and still hold media.
+        self.terminal_undeleted: list[str] = []
+        # job_id -> created_at, for jobs still sitting in awaiting_upload.
+        self.awaiting_upload: dict[str, dt.datetime] = {}
         self.cold_deleted: dict[str, dt.datetime] = {}
 
     def add(
@@ -73,8 +77,16 @@ class FakeRetentionStore:
     def record_event(self, job_id: str, event: str, detail: dict) -> None:
         self.events.append((job_id, event, detail))
 
-    def find_undeleted_completed(self, limit: int = 100) -> list[str]:
-        return self.completed_undeleted[:limit]
+    def find_undeleted_terminal(self, limit: int = 100) -> list[str]:
+        return self.terminal_undeleted[:limit]
+
+    def find_abandoned_uploads(self, older_than, limit: int = 100) -> list[str]:
+        return [
+            jid for jid, created in self.awaiting_upload.items()
+            if created < older_than
+            and not self.rows[jid].retention_hold
+            and self.rows[jid].raw_deleted_at is None
+        ][:limit]
 
     # --- helpers ---
     def event_names(self, job_id: str) -> list[str]:

@@ -32,11 +32,16 @@ class FakeDb:
         retention_hold: bool = False,
         raw_object_key: str | None = None,
         derived_prefix: str | None = None,
+        status: str = "queued",
+        created_at: dt.datetime | None = None,
     ) -> None:
         self.jobs[job_id] = {
             "id": job_id,
             "media_type": media_type,
-            "status": "queued",
+            "status": status,
+            # NOT NULL DEFAULT now() in the real schema; the abandoned-upload
+            # sweep keys off it, so the fake has to carry it too.
+            "created_at": created_at or dt.datetime.now(dt.timezone.utc),
             "attempts": 0,
             "content_hash": None,
             "retention_hold": retention_hold,
@@ -155,11 +160,27 @@ class FakeDb:
     def record_event(self, job_id: str, event: str, detail: dict) -> None:
         self.events.append((job_id, event, detail))
 
-    def find_undeleted_completed(self, limit: int = 100) -> list[str]:
+    def find_undeleted_terminal(self, limit: int = 100) -> list[str]:
+        """Mirrors the real predicate: terminal means completed OR failed.
+
+        A dead-lettered job never gets completed_at, so keying on that alone
+        left its media with no delete path at all.
+        """
         return [
             jid for jid, j in self.jobs.items()
-            if j["completed_at"] is not None
+            if (j["completed_at"] is not None
+                or j.get("status") in {"dead_letter", "failed"})
             and not j["retention_hold"]
+            and (j["raw_deleted_at"] is None or j["derived_deleted_at"] is None)
+        ][:limit]
+
+    def find_abandoned_uploads(self, older_than, limit: int = 100) -> list[str]:
+        return [
+            jid for jid, j in self.jobs.items()
+            if j.get("status") == "awaiting_upload"
+            and not j["retention_hold"]
+            and j.get("created_at") is not None
+            and j["created_at"] < older_than
             and (j["raw_deleted_at"] is None or j["derived_deleted_at"] is None)
         ][:limit]
 

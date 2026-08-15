@@ -75,7 +75,10 @@ class RetentionStore(Protocol):
         self, job_id: str, until: dt.datetime, *, cold_prefix: str
     ) -> None: ...
     def record_event(self, job_id: str, event: str, detail: dict) -> None: ...
-    def find_undeleted_completed(self, limit: int = 100) -> list[str]: ...
+    def find_undeleted_terminal(self, limit: int = 100) -> list[str]: ...
+    def find_abandoned_uploads(
+        self, older_than: dt.datetime, limit: int = 100
+    ) -> list[str]: ...
     def find_expired_extended_retention(
         self, now: dt.datetime, limit: int = 100
     ) -> list[str]: ...
@@ -270,15 +273,48 @@ def sweep_undeleted(
     *,
     limit: int = 100,
 ) -> list[DeleteReport]:
-    """Catch jobs that completed but whose media delete never landed.
+    """Catch jobs that reached a terminal state but still hold media.
 
     The completion-triggered delete is the primary path; this is the backstop
     for a worker that died between writing the result and deleting the bytes.
     Without it, a crash silently turns "deleted on completion" into a lie.
+
+    Terminal includes dead-lettered and failed jobs, not just completed ones.
+    A job that dead-letters never fires the completion delete (it never
+    completed) and never sets completed_at, so it is exactly the case with no
+    other delete path -- and a failing pipeline produces these in bulk.
     """
     reports: list[DeleteReport] = []
-    for job_id in store.find_undeleted_completed(limit=limit):
+    for job_id in store.find_undeleted_terminal(limit=limit):
         reports.append(delete_media_for_job(job_id, store, storage))
+    return reports
+
+
+def sweep_abandoned_uploads(
+    store: RetentionStore,
+    storage: storage_mod.Storage,
+    *,
+    older_than_hours: int | None = None,
+    limit: int = 100,
+    now: dt.datetime | None = None,
+) -> list[DeleteReport]:
+    """Clear media from jobs that were granted an upload and never notified.
+
+    Such a job never enters the pipeline, so it never completes and never
+    dead-letters -- it simply sits in awaiting_upload holding whatever the
+    client pushed to object storage. Neither the completion delete nor the
+    terminal sweep will ever look at it.
+
+    Deletion still goes through delete_media_for_job, so the hold flag gates
+    this path exactly like every other one.
+    """
+    now = now or _now()
+    hours = older_than_hours if older_than_hours is not None else settings.abandoned_upload_hours
+    cutoff = now - dt.timedelta(hours=hours)
+
+    reports: list[DeleteReport] = []
+    for job_id in store.find_abandoned_uploads(cutoff, limit=limit):
+        reports.append(delete_media_for_job(job_id, store, storage, now=now))
     return reports
 
 

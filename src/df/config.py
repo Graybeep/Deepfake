@@ -83,6 +83,11 @@ class Settings:
     extended_retention_days: int = field(
         default_factory=lambda: _int("DF_EXTENDED_RETENTION_DAYS", 30)
     )
+    # Age at which a job still in awaiting_upload is treated as abandoned and
+    # its media cleared. Must comfortably exceed the presign TTL above.
+    abandoned_upload_hours: int = field(
+        default_factory=lambda: _int("DF_ABANDONED_UPLOAD_HOURS", 24)
+    )
 
     # queue / DLQ
     max_attempts: int = field(default_factory=lambda: _int("DF_MAX_ATTEMPTS", 3))

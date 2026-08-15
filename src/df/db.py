@@ -252,18 +252,53 @@ class Db:
                 (job_id, event, json.dumps(detail)),
             )
 
-    def find_undeleted_completed(self, limit: int = 100) -> list[str]:
+    def find_undeleted_terminal(self, limit: int = 100) -> list[str]:
+        """Jobs that reached a terminal state but still hold media.
+
+        Terminal means completed OR dead-lettered OR failed -- not merely
+        completed. A dead-lettered job never gets completed_at set (see
+        workers/loop.py), so keying this on completed_at alone left failed
+        jobs' raw uploads and face crops in the bucket with no expiry at all.
+        The completion-triggered delete cannot cover them either, because they
+        never completed. Failures also cluster: one bad deploy dead-letters
+        every job that arrives during it, and each one leaks its media.
+        """
         with self.conn() as c:
             rows = c.execute(
                 """
                 SELECT id FROM jobs
-                 WHERE completed_at IS NOT NULL
+                 WHERE (completed_at IS NOT NULL
+                        OR status IN ('dead_letter', 'failed'))
                    AND retention_hold = FALSE
                    AND (raw_deleted_at IS NULL OR derived_deleted_at IS NULL)
-                 ORDER BY completed_at
+                 ORDER BY COALESCE(completed_at, updated_at)
                  LIMIT %s
                 """,
                 (limit,),
+            ).fetchall()
+        return [str(r["id"]) for r in rows]
+
+    def find_abandoned_uploads(self, older_than: dt.datetime, limit: int = 100) -> list[str]:
+        """Jobs that got an upload grant and never came back.
+
+        A client can PUT/POST to its presigned URL and simply never call the
+        notify endpoint. The job then sits in awaiting_upload forever, holding
+        real media that no terminal-state sweep will ever look at. The presign
+        TTL is minutes, so anything older than the threshold can no longer be
+        uploaded to and is safe to clear.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                """
+                SELECT id FROM jobs
+                 WHERE status = 'awaiting_upload'
+                   AND retention_hold = FALSE
+                   AND created_at < %s
+                   AND (raw_deleted_at IS NULL OR derived_deleted_at IS NULL)
+                 ORDER BY created_at
+                 LIMIT %s
+                """,
+                (older_than, limit),
             ).fetchall()
         return [str(r["id"]) for r in rows]
 
