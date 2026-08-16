@@ -176,6 +176,14 @@ def _public_job(job: dict) -> dict:
             if job["extended_retention_until"] else None
         ),
     }
+    # A failed job has to say why. The WebSocket already publishes the reason
+    # on the failure event, but this polling view omitted it -- so a client on
+    # the reconnect fallback that Tier 1 mandates learned that its upload
+    # failed and never what was wrong with it. Same string the socket sends,
+    # so this exposes nothing the other channel did not already.
+    if job["status"] in {"dead_letter", "failed"}:
+        doc["failure_reason"] = job.get("error") or "processing failed"
+
     # Scores are manipulable by adversarial perturbation; there is no
     # adversarial-input pre-classifier (Tier 3, not built). Say so on every
     # result rather than burying it in docs.

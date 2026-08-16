@@ -5,9 +5,15 @@ calls — especially anything touching deletion, retention, or claims about what
 
 ## What this is
 Deepfake detection service. Three ingest pipelines (video, image, audio) converging on
-shared aggregation, score-band routing, and retention logic. Solo/small-team, 5-day MVP
-sprint. Hardening deferred in tiers — see below, and don't quietly build past a tier
-without updating this file.
+shared aggregation, score-band routing, and retention logic. Solo/small-team.
+
+**The 5-day MVP sprint constraint was lifted on 2026-08-16 — there is more time.**
+The tiers below still stand, but they now describe *order and dependency*, not what
+fits in a week. Re-read any deferral that was justified by the clock: some had a
+second, independent reason and still hold, some were purely budget and are now open.
+Each is marked. "We have time now" is a reason to schedule something, never on its own
+a reason to build it — a half-built adversarial pre-classifier is still worse than an
+honestly absent one. Don't quietly build past a tier without updating this file.
 
 ## Pipelines
 Video: Ingest → Frame Sample → Face Extract → Face Align → EfficientNet (face model) → Aggregate → Router
@@ -79,14 +85,22 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   this in the same phase as the CPU preprocessing worker, not later — a worker parsing
   untrusted video/audio before isolation exists is an open compromise window.
 - Redis Streams consumer groups, per-retrain recalibration, isotonic calibration —
-  week 2+.
+  these were "week 2+" under the old budget. They are gated on a dependency, not on
+  time: per-retrain recalibration and isotonic calibration both need real trained
+  weights and a held-out set, neither of which exists yet. Redis Streams is the one
+  item here that extra time genuinely unblocks.
 
 ## Deployment
 MVP: Docker + docker-compose, single GPU node, one image per service (gateway,
-CPU-preprocess, GPU-inference, aggregation/router). Do not start K8s manifests until
-docker-compose runs end-to-end — cluster provisioning, secrets, ingress, and PVCs for
-Postgres/Redis are themselves multi-day work that will eat the 5-day budget before any
-detection code ships.
+CPU-preprocess, GPU-inference, aggregation/router). The gate was: do not start K8s
+manifests until docker-compose runs end-to-end. **That gate is now satisfied —
+verified 2026-08-16 — and the 5-day budget behind it is gone.** K8s is therefore
+schedulable rather than forbidden.
+
+It is still not next. Cluster provisioning, secrets, ingress and PVCs remain multi-day
+work, and on a single GPU node they buy nothing the compose stack does not already do.
+The trigger for K8s is a second node, a real availability requirement, or autoscaling
+the GPU pod — not the availability of time.
 Target state (post-MVP): K8s, one Deployment per service above, HPA on the
 GPU-inference pod specifically — that's the cost driver — managed or PVC-backed
 Postgres/Redis.
@@ -105,9 +119,11 @@ history, not just the working tree — deleting a credential in a later commit d
 remove it from a history that's already public. Do this before publishing, not after.
 
 ## Platform
-Web app, not native. Presigned S3 + WebSocket are already web-native. No stated
-offline or push requirement justifies two extra build targets and store review inside
-a 5-day timeline. Revisit only if one becomes a real requirement.
+Web app, not native. Presigned S3 + WebSocket are already web-native. The timeline
+half of this argument is gone, but the substantive half is not: there is still no
+stated offline or push requirement, and two extra build targets plus store review is a
+permanent ongoing cost, not a one-off spend that more time absorbs. Revisit only if
+one becomes a real requirement.
 
 ## Cannot claim in code, comments, or user-facing copy
 - "Adversarial robustness" — not built.

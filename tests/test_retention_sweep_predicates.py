@@ -18,8 +18,13 @@ arrives during it, so this leaks in bulk exactly when nobody is watching.
 from __future__ import annotations
 
 import datetime as dt
+import inspect
+import pathlib
+import re
 
 import pytest
+
+from df.db import Db
 
 from df.retention import (
     DeleteOutcome,
@@ -182,33 +187,93 @@ def test_abandoned_upload_row_becomes_terminal(db, storage):
 # --- the enumeration itself -------------------------------------------------
 
 
-def test_every_status_the_schema_allows_has_a_sweep_or_is_covered():
-    """Guards the property, not one instance of it.
-
-    Two leaks were found by spotting media in a bucket; both were a status the
-    sweep query did not know about. This fails when someone adds a status to
-    the migration without deciding how its media gets deleted -- which is the
-    only way to stop rediscovering this bug one state at a time.
-    """
-    import pathlib
-    import re
-
+def schema_statuses() -> set[str]:
+    """Every value the migration's CHECK constraint permits."""
     sql = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "001_init.sql"
-    text = sql.read_text(encoding="utf-8")
-    block = re.search(r"CHECK \(status IN \((.*?)\)\)", text, re.S)
+    block = re.search(r"CHECK \(status IN \((.*?)\)\)", sql.read_text(encoding="utf-8"), re.S)
     assert block, "could not find the status CHECK constraint"
-    declared = set(re.findall(r"'([a-z_]+)'", block.group(1)))
+    return set(re.findall(r"'([a-z_]+)'", block.group(1)))
 
-    # Every value must be claimed by exactly one of these.
-    terminal = {"complete", "failed", "dead_letter"}   # sweep_undeleted
-    in_flight = {"queued", "preprocessing", "inference", "aggregating"}  # sweep_stalled_jobs
-    pre_pipeline = {"awaiting_upload"}                 # sweep_abandoned_uploads
 
-    covered = terminal | in_flight | pre_pipeline
-    assert declared == covered, (
-        f"status values with no sweep path: {sorted(declared - covered)}; "
-        f"swept values not in the schema: {sorted(covered - declared)}"
+def status_literals_in(fn) -> set[str]:
+    """Status values named in the SQL this function actually executes.
+
+    Read out of the live source rather than restated here. A test that carries
+    its own list of what the sweeps 'should' cover is a second description of
+    the code that can drift from it -- the same failure that let FakeDb diverge
+    from psycopg3 and hide a broken write path behind a green suite.
+    """
+    src = inspect.getsource(fn)
+    found: set[str] = set()
+    for m in re.finditer(r"status\s+IN\s*\(([^)]*)\)", src, re.I):
+        found |= set(re.findall(r"'([a-z_]+)'", m.group(1)))
+    found |= set(re.findall(r"status\s*=\s*'([a-z_]+)'", src, re.I))
+    return found
+
+
+# The finders whose predicates decide what each sweep will ever see.
+FINDERS = {
+    "sweep_undeleted": Db.find_undeleted_terminal,
+    "sweep_stalled_jobs": Db.find_stalled_in_flight,
+    "sweep_abandoned_uploads": Db.find_abandoned_uploads,
+}
+
+
+def test_the_real_sql_predicates_cover_every_status_the_schema_allows():
+    """Reads both sides from code: the constraint from the migration, the
+    covered set from the SQL in db.py.
+
+    Deleting a status from a predicate makes this fail, which a maintained
+    list in the test file would not. Manual auditing missed a status three
+    times running, so the check has to look at what executes.
+    """
+    covered: set[str] = set()
+    for name, fn in FINDERS.items():
+        named = status_literals_in(fn)
+        assert named, f"{name}: no status literal found in {fn.__name__} -- extraction broke"
+        covered |= named
+
+    # 'complete' is reached by completed_at IS NOT NULL, not by naming the
+    # status. Asserted against the source so removing that clause fails here.
+    terminal_src = inspect.getsource(Db.find_undeleted_terminal)
+    assert re.search(r"completed_at\s+IS\s+NOT\s+NULL", terminal_src, re.I), (
+        "find_undeleted_terminal no longer selects on completed_at, so nothing "
+        "reaches 'complete'"
     )
+    covered.add("complete")
+
+    declared = schema_statuses()
+    assert declared == covered, (
+        f"statuses with no sweep predicate: {sorted(declared - covered)}; "
+        f"predicates naming a status the schema forbids: {sorted(covered - declared)}"
+    )
+
+
+@pytest.mark.parametrize("status", sorted(schema_statuses()))
+def test_every_schema_status_is_claimed_by_exactly_one_sweep(db, storage, status):
+    """The behavioural counterpart, run through the fakes.
+
+    The test above proves the real SQL names every status. This proves a job
+    actually holding each one gets picked up -- and by exactly one sweep, so
+    no status is double-owned or silently owned by nobody.
+    """
+    job_id = f"job-{status}"
+    raw, derived = seed(db, storage, job_id, status=status,
+                        completed=(status == "complete"))
+    db.jobs[job_id]["updated_at"] = LONG_AGO
+
+    claimed = {
+        "terminal": [r.job_id for r in sweep_undeleted(db, storage)],
+        "stalled": [r.job_id for r in sweep_stalled_jobs(
+            db, storage, older_than_hours=6, now=NOW)],
+        "abandoned": [r.job_id for r in sweep_abandoned_uploads(
+            db, storage, older_than_hours=24, now=NOW)],
+    }
+    owners = [name for name, ids in claimed.items() if job_id in ids]
+
+    assert owners, f"status {status!r} is claimed by no sweep -- its media is never deleted"
+    assert len(owners) == 1, f"status {status!r} claimed by more than one sweep: {owners}"
+    assert not media_present(storage, raw, derived)
 
 
 # --- abandoned upload sweep -------------------------------------------------

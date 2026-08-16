@@ -1,0 +1,561 @@
+<title>Deepfake Detection Service</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 16mm 15mm; }
+
+  :root {
+    --ink: #16191d;
+    --muted: #5b6470;
+    --line: #d7dce3;
+    --accent: #1f4e79;
+    --accent-soft: #eef3f8;
+    --warn-bg: #fdf6ec;
+    --warn-line: #d9a441;
+    --ok: #2e6b4f;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    font-size: 10.2pt;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  h1, h2, h3 { color: var(--accent); font-weight: 600; }
+
+  h1 { font-size: 23pt; line-height: 1.15; margin: 0 0 4px; letter-spacing: -0.4px; }
+  h2 {
+    font-size: 13.5pt;
+    margin: 0 0 10px;
+    padding-bottom: 5px;
+    border-bottom: 2px solid var(--accent);
+  }
+  h3 { font-size: 10.8pt; margin: 14px 0 5px; color: var(--ink); }
+
+  p { margin: 0 0 8px; }
+  ul, ol { margin: 0 0 8px; padding-left: 18px; }
+  li { margin-bottom: 3px; }
+
+  section { margin-bottom: 20px; }
+  .break { page-break-before: always; }
+  section, table, figure, .callout { page-break-inside: avoid; }
+  /* never strand a heading at the foot of a page, away from what it introduces */
+  h2, h3 { page-break-after: avoid; break-after: avoid; }
+
+  /* ---- cover ---- */
+  .cover { border-bottom: 3px solid var(--accent); padding-bottom: 14px; margin-bottom: 18px; }
+  .kicker {
+    text-transform: uppercase; letter-spacing: 1.6px; font-size: 7.8pt;
+    color: var(--muted); font-weight: 600; margin-bottom: 8px;
+  }
+  .sub { font-size: 11pt; color: var(--muted); margin: 6px 0 0; }
+  .meta {
+    display: flex; gap: 26px; margin-top: 12px;
+    font-size: 8.6pt; color: var(--muted);
+  }
+  .meta b { color: var(--ink); font-weight: 600; display: block; }
+
+  /* ---- tables ---- */
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 10px; font-size: 9.2pt; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 8.6pt;
+       text-transform: uppercase; letter-spacing: 0.4px; }
+  td code { font-size: 8.6pt; }
+
+  code, .mono {
+    font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 9pt;
+    background: #f2f4f7;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* ---- callouts ---- */
+  .callout {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 9px 12px;
+    margin: 10px 0;
+    font-size: 9.4pt;
+  }
+  .callout.warn { background: var(--warn-bg); border-left-color: var(--warn-line); }
+  .callout .t { font-weight: 600; display: block; margin-bottom: 3px; }
+
+  figure { margin: 10px 0 14px; }
+  figcaption { font-size: 8.4pt; color: var(--muted); margin-top: 5px; text-align: center; }
+  svg { display: block; width: 100%; height: auto; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  .tag {
+    display: inline-block; font-size: 7.6pt; font-weight: 600; padding: 1px 6px;
+    border-radius: 9px; letter-spacing: 0.3px; text-transform: uppercase;
+  }
+  .t1 { background: #e4efe8; color: var(--ok); }
+  .t2 { background: #fdf1dc; color: #8a5d12; }
+  .t3 { background: #eceef1; color: var(--muted); }
+
+  .status { font-size: 9.2pt; }
+  .status td:first-child { width: 26px; }
+</style>
+
+<div class="cover">
+  <div class="kicker">Technical Solution Document</div>
+  <h1>Deepfake &amp; Manipulated Media Detection</h1>
+  <p class="sub">A triage service for video, image and audio — built to be auditable, and honest about what it does not know.</p>
+  <div class="meta">
+    <div><b>Scope</b>MVP, timeline reopened</div>
+    <div><b>Deployment</b>Docker Compose, single GPU node</div>
+    <div><b>Interface</b>Web application</div>
+    <div><b>Status</b>Pipeline verified end-to-end</div>
+  </div>
+</div>
+
+<!-- ============ 1. PROBLEM ============ -->
+<section>
+  <h2>1. Problem Statement Understanding</h2>
+
+  <p>Synthetic and manipulated media — face swaps, reenactment video, cloned voices — has become cheap
+  to produce and fast to distribute. On social platforms the damage is done in the first hours of
+  circulation, long before any manual verification can catch up. The task is to build a system that
+  helps detect such content.</p>
+
+  <p>Reading past the surface statement, four constraints shape everything below:</p>
+
+  <h3>1.1 The output is a triage signal, not a verdict</h3>
+  <p>No detector is correct all the time, and detection accuracy degrades sharply on media the model
+  was not trained on. A system that returns a confident "FAKE" is more dangerous than useful: a false
+  positive on authentic footage is itself a form of misinformation, and it is the kind that gets
+  someone accused. The honest output is a <em>score with a band and an explicit uncertainty region</em>,
+  routed to different handling — not a binary label.</p>
+
+  <h3>1.2 The input is hostile</h3>
+  <p>Every uploaded file is attacker-controlled. It is parsed by media decoders with a long history of
+  memory-safety bugs, and the scores themselves can be moved by adversarial perturbation of the input.
+  Both facts have to be designed around rather than assumed away.</p>
+
+  <h3>1.3 The media is biometric, so retention is a liability</h3>
+  <p>Uploads are faces and voices. Storing them indefinitely creates a growing breach surface and a
+  regulatory exposure that grows with the archive. Deletion must be the default and must be
+  <em>verifiable</em>, while still keeping enough evidence that a disputed result can be re-examined.</p>
+
+  <h3>1.4 A result nobody can reconstruct is worthless</h3>
+  <p>If a decision is challenged weeks later, "the model said 84" is not defensible unless the exact
+  weights, the aggregation method and its parameters, and the hash of the analysed bytes were all
+  recorded at decision time. That record is a first-class deliverable, not logging.</p>
+
+  <div class="callout warn">
+    <span class="t">Explicit non-goal</span>
+    This system does not decide whether content is true, nor whether it should be removed. It detects
+    signals of <em>synthesis and manipulation</em> and routes them for handling. Authenticity and
+    truthfulness are different questions.
+  </div>
+</section>
+
+<!-- ============ 2. SOLUTION ============ -->
+<section>
+  <h2>2. Proposed Solution</h2>
+
+  <p>A service that accepts video, image or audio and returns a calibrated manipulation score, a
+  routing band, and a reproducible audit record — with the underlying biometric media deleted on a
+  timer by default.</p>
+
+  <h3>2.1 Three pipelines, one decision path</h3>
+  <p>Each modality is analysed by a pipeline suited to it, but all three converge on shared
+  aggregation, band routing and retention logic. This keeps one place where a score becomes a
+  decision, rather than three subtly different ones.</p>
+
+  <h3>2.2 Score the parts, then aggregate deliberately</h3>
+  <p>A model scores individual frames, faces or audio chunks. Those per-item scores are combined with a
+  <strong>confidence-weighted trimmed mean</strong> — never a plain mean, which a handful of badly
+  aligned faces can drag anywhere. Items are weighted down by detection and alignment confidence, so a
+  frame whose face was barely found counts for less.</p>
+
+  <h3>2.3 Refuse to guess</h3>
+  <p>When face extraction returns nothing, the result is <code>undetermined</code>. It is never quietly
+  collapsed into "authentic". When more than one face is present, each is scored and the item rolls up
+  to <strong>worst-case severity</strong>, so a manipulated face in a crowd is not averaged away.</p>
+
+  <h3>2.4 Bands, not percentages</h3>
+  <p>The aggregated score maps to a band that determines handling. The bands form a
+  <strong>total partition</strong> of the range, so routing has no undefined input.</p>
+
+  <table>
+    <thead><tr><th>Score</th><th>Band</th><th>Handling</th></tr></thead>
+    <tbody>
+      <tr><td>&lt; 20</td><td>Likely authentic</td><td>Auto-clear, delete on schedule</td></tr>
+      <tr><td>20 – 40</td><td>Leaning authentic</td><td>Auto-clear, delete on schedule</td></tr>
+      <tr><td>40 – 60</td><td>Uncertain</td><td>Flagged for review + alert (normal urgency)</td></tr>
+      <tr><td>60 – 80</td><td>Leaning manipulated</td><td>Flagged + alert (low urgency); still deletes on schedule</td></tr>
+      <tr><td>&gt; 80</td><td>Likely manipulated</td><td>Flagged + alert; extended retention window opens</td></tr>
+      <tr><td>—</td><td>Undetermined</td><td>No usable signal; flagged, never scored as real or fake</td></tr>
+    </tbody>
+  </table>
+
+  <p>The 60–80 region gets particular care. It sits directly below the high-severity threshold, whose
+  calibration is not trusted enough to display as a raw percentage, so it is logged and flagged rather
+  than passed silently into normal deletion.</p>
+</section>
+
+<!-- ============ 3. ARCHITECTURE ============ -->
+<section class="break">
+  <h2>3. System Architecture</h2>
+
+  <h3>3.1 Detection pipelines</h3>
+  <figure>
+    <svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8a94a2"/>
+        </marker>
+      </defs>
+      <g font-size="10.5" text-anchor="middle">
+        <!-- lane labels -->
+        <g font-size="10" font-weight="600" text-anchor="start" fill="#1f4e79">
+          <text x="4" y="34">VIDEO</text>
+          <text x="4" y="119">IMAGE</text>
+          <text x="4" y="204">AUDIO</text>
+        </g>
+
+        <!-- video lane -->
+        <g>
+          <rect x="60" y="18" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="119" y="39" fill="#16191d">Ingest</text>
+          <rect x="196" y="18" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="255" y="39" fill="#16191d">Frame Sample</text>
+          <rect x="332" y="18" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="391" y="39" fill="#16191d">Face Extract</text>
+          <rect x="468" y="18" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="527" y="39" fill="#16191d">Face Align</text>
+          <rect x="604" y="18" width="128" height="34" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+          <text x="668" y="34" fill="#1f4e79" font-weight="600" font-size="9.5">EfficientNet</text>
+          <text x="668" y="45" fill="#5b6470" font-size="8">face model</text>
+        </g>
+        <!-- image lane -->
+        <g>
+          <rect x="196" y="103" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="255" y="124" fill="#16191d">Ingest</text>
+          <rect x="332" y="103" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="391" y="124" fill="#16191d">Face Extract</text>
+          <rect x="468" y="103" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="527" y="124" fill="#16191d">Face Align</text>
+          <rect x="604" y="103" width="128" height="34" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+          <text x="668" y="119" fill="#1f4e79" font-weight="600" font-size="9.5">EfficientNet</text>
+          <text x="668" y="130" fill="#5b6470" font-size="8">face model (shared)</text>
+        </g>
+        <!-- audio lane -->
+        <g>
+          <rect x="196" y="188" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="255" y="209" fill="#16191d">Ingest</text>
+          <rect x="332" y="188" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="391" y="209" fill="#16191d">Chunk</text>
+          <rect x="468" y="188" width="118" height="34" rx="4" fill="#eef3f8" stroke="#b9c8d8"/>
+          <text x="527" y="209" fill="#16191d">Spectrogram</text>
+          <rect x="604" y="188" width="128" height="34" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+          <text x="668" y="204" fill="#1f4e79" font-weight="600" font-size="9.5">EfficientNet</text>
+          <text x="668" y="215" fill="#5b6470" font-size="8">audio model</text>
+        </g>
+
+        <!-- arrows within lanes -->
+        <g stroke="#8a94a2" stroke-width="1.2" marker-end="url(#ar)" fill="none">
+          <path d="M178,35 L194,35"/><path d="M314,35 L330,35"/><path d="M450,35 L466,35"/><path d="M586,35 L602,35"/>
+          <path d="M314,120 L330,120"/><path d="M450,120 L466,120"/><path d="M586,120 L602,120"/>
+          <path d="M314,205 L330,205"/><path d="M450,205 L466,205"/><path d="M586,205 L602,205"/>
+        </g>
+
+        <!-- converge -->
+        <g stroke="#8a94a2" stroke-width="1.2" fill="none" marker-end="url(#ar)">
+          <path d="M732,35 C770,35 770,105 788,105"/>
+          <path d="M732,120 L788,120"/>
+          <path d="M732,205 C770,205 770,135 788,135"/>
+        </g>
+
+        <rect x="790" y="86" width="86" height="68" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+        <text x="833" y="112" fill="#1f4e79" font-weight="600" font-size="9.5">Aggregate</text>
+        <text x="833" y="125" fill="#5b6470" font-size="7.6">weighted /</text>
+        <text x="833" y="135" fill="#5b6470" font-size="7.6">trimmed mean</text>
+
+        <path d="M876,120 L894,120" stroke="#8a94a2" stroke-width="1.2" marker-end="url(#ar)" fill="none"/>
+        <rect x="896" y="86" width="80" height="68" rx="4" fill="#1f4e79"/>
+        <text x="936" y="112" fill="#ffffff" font-weight="600" font-size="9.5">Router</text>
+        <text x="936" y="126" fill="#c9dcec" font-size="7.6">band +</text>
+        <text x="936" y="136" fill="#c9dcec" font-size="7.6">retention</text>
+
+        <text x="490" y="265" font-size="8.6" fill="#5b6470">
+          Face model is shared by video and image (one model_version_id). Audio is a separate model with its own.
+        </text>
+        <text x="490" y="280" font-size="8.6" fill="#5b6470">
+          For images, aggregation is the identity function — there is a single item to score.
+        </text>
+      </g>
+    </svg>
+    <figcaption>Figure 1 — Three ingest pipelines converging on shared aggregation and routing.</figcaption>
+  </figure>
+
+  <h3>3.2 Service topology and trust boundary</h3>
+  <p>Network layout is a security control, not organisation. The container that parses attacker-supplied
+  media has no route off the host.</p>
+
+  <figure>
+    <svg viewBox="0 0 980 290" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+      <g text-anchor="middle" font-size="10">
+        <!-- edge zone -->
+        <rect x="8" y="26" width="300" height="240" rx="6" fill="#f7fafc" stroke="#b9c8d8" stroke-dasharray="4 3"/>
+        <text x="158" y="18" font-size="9" font-weight="600" fill="#1f4e79">EDGE — reachable from host</text>
+
+        <rect x="40" y="52" width="110" height="40" rx="4" fill="#ffffff" stroke="#8a94a2"/>
+        <text x="95" y="77" fill="#16191d">Browser</text>
+
+        <rect x="166" y="52" width="110" height="40" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+        <text x="221" y="70" fill="#1f4e79" font-weight="600" font-size="9.5">Gateway</text>
+        <text x="221" y="83" fill="#5b6470" font-size="8">FastAPI :8000</text>
+
+        <rect x="103" y="150" width="110" height="40" rx="4" fill="#ffffff" stroke="#8a94a2"/>
+        <text x="158" y="168" fill="#16191d" font-size="9.5">Object Storage</text>
+        <text x="158" y="181" fill="#5b6470" font-size="8">MinIO / S3 :9000</text>
+
+        <g stroke="#8a94a2" stroke-width="1.2" fill="none" marker-end="url(#ar2)">
+          <path d="M150,66 L164,66"/>
+          <path d="M95,92 L95,170 L101,170"/>
+        </g>
+        <text x="52" y="130" font-size="7.6" fill="#5b6470" text-anchor="start">presigned</text>
+        <text x="52" y="140" font-size="7.6" fill="#5b6470" text-anchor="start">POST upload</text>
+
+        <!-- internal zone -->
+        <rect x="330" y="26" width="642" height="240" rx="6" fill="#fbf8f3" stroke="#d9a441" stroke-dasharray="4 3"/>
+        <text x="651" y="18" font-size="9" font-weight="600" fill="#8a5d12">INTERNAL — no route off the host</text>
+
+        <rect x="352" y="52" width="132" height="46" rx="4" fill="#fdf1dc" stroke="#d9a441"/>
+        <text x="418" y="70" fill="#8a5d12" font-weight="600" font-size="9.5">CPU Preprocess</text>
+        <text x="418" y="83" fill="#8a5d12" font-size="7.6">decodes untrusted media</text>
+        <text x="418" y="93" fill="#8a5d12" font-size="7.6">read-only · cap_drop ALL</text>
+
+        <rect x="502" y="52" width="128" height="46" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+        <text x="566" y="72" fill="#1f4e79" font-weight="600" font-size="9.5">GPU Inference</text>
+        <text x="566" y="86" fill="#5b6470" font-size="7.6">EfficientNet · CUDA</text>
+
+        <rect x="648" y="52" width="120" height="46" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+        <text x="708" y="72" fill="#1f4e79" font-weight="600" font-size="9.5">Router</text>
+        <text x="708" y="86" fill="#5b6470" font-size="7.6">bands · retention</text>
+
+        <rect x="786" y="52" width="168" height="46" rx="4" fill="#dce8f2" stroke="#1f4e79"/>
+        <text x="870" y="72" fill="#1f4e79" font-weight="600" font-size="9.5">Retention Sweeper</text>
+        <text x="870" y="86" fill="#5b6470" font-size="7.6">crash recovery · expiry</text>
+
+        <rect x="392" y="160" width="150" height="44" rx="4" fill="#ffffff" stroke="#8a94a2"/>
+        <text x="467" y="179" fill="#16191d" font-size="9.5">PostgreSQL</text>
+        <text x="467" y="192" fill="#5b6470" font-size="7.6">job row = audit trail</text>
+
+        <rect x="574" y="160" width="150" height="44" rx="4" fill="#ffffff" stroke="#8a94a2"/>
+        <text x="649" y="179" fill="#16191d" font-size="9.5">Redis</text>
+        <text x="649" y="192" fill="#5b6470" font-size="7.6">queue · status · AOF+RDB</text>
+
+        <rect x="756" y="160" width="150" height="44" rx="4" fill="#ffffff" stroke="#8a94a2"/>
+        <text x="831" y="179" fill="#16191d" font-size="9.5">Cold Storage</text>
+        <text x="831" y="192" fill="#5b6470" font-size="7.6">extended window copies</text>
+
+        <g stroke="#8a94a2" stroke-width="1.1" fill="none" marker-end="url(#ar2)">
+          <path d="M484,75 L500,75"/>
+          <path d="M630,75 L646,75"/>
+          <path d="M768,75 L784,75"/>
+          <path d="M418,98 L418,158"/>
+          <path d="M708,98 L708,158"/>
+        </g>
+        <path d="M276,72 L350,72" stroke="#8a94a2" stroke-width="1.2" fill="none" marker-end="url(#ar2)"/>
+
+        <text x="651" y="238" font-size="8.4" fill="#5b6470">
+          No AV scanning is deployed (deferred). Container isolation and lockdown substitute for it,
+        </text>
+        <text x="651" y="251" font-size="8.4" fill="#5b6470">
+          and ship in the same phase as the worker that parses untrusted input — not later.
+        </text>
+      </g>
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8a94a2"/>
+        </marker>
+      </defs>
+    </svg>
+    <figcaption>Figure 2 — Two-zone topology. Only the gateway and object storage are reachable from outside.</figcaption>
+  </figure>
+
+  <h3>3.3 Request lifecycle</h3>
+  <ol>
+    <li>Client requests a job. The gateway rate-limits, creates the Postgres row, and returns a
+      <strong>presigned POST</strong> grant.</li>
+    <li>Client uploads bytes <em>directly</em> to object storage — large media never transits the API.</li>
+    <li>Client notifies the gateway, which enqueues the job. The notify endpoint is idempotent.</li>
+    <li>CPU worker decodes, samples, extracts and aligns faces (or chunks audio into spectrograms).</li>
+    <li>GPU worker scores every item and writes per-item rows.</li>
+    <li>Router aggregates, assigns a band, raises flags, and triggers deletion of the working media.</li>
+    <li>Status is pushed over WebSocket throughout, with polling as the reconnect fallback.</li>
+  </ol>
+</section>
+
+<!-- ============ 4. FEATURES ============ -->
+<section class="break">
+  <h2>4. Key Features</h2>
+
+  <h3>4.1 Verifiable deletion by default <span class="tag t1">Tier 1</span></h3>
+  <p>Raw uploads and derived face crops are TTL-deleted when inference completes. Every delete path —
+  the completion trigger, the crash-recovery sweeper, and cold-storage expiry — checks a hold flag
+  first. The flag column and the check that reads it shipped in the same commit as the delete path,
+  before anything could set it true.</p>
+
+  <h3>4.2 The job row is the audit trail <span class="tag t1">Tier 1</span></h3>
+  <p>Every result carries the SHA-256 of the analysed bytes, the <code>model_version_id</code> that
+  produced the scores, and the exact aggregation method and parameters. Per-item scores are retained
+  after the media is deleted — they are numbers, not biometrics — so a disputed result stays
+  examinable without keeping anyone's face.</p>
+
+  <h3>4.3 Upload path that cannot be used as free storage <span class="tag t1">Tier 1</span></h3>
+  <p>Uploads bypass the API by design, which means ingress rate limiting never sees those bytes. The
+  grant is therefore a POST policy carrying a signed <code>content-length-range</code> condition, which
+  object storage itself enforces. A presigned PUT would have signed the URL but not the body length —
+  an unbounded write to the bucket.</p>
+
+  <h3>4.4 Extended retention window <span class="tag t2">Tier 2</span></h3>
+  <p>A high-band result copies <em>the face crops that drove the score</em> — not the full raw source —
+  into cold storage under a fixed 30-day timer, so a dispute has the specific evidence to re-examine
+  while the original upload is still deleted on schedule.</p>
+  <div class="callout warn">
+    <span class="t">This is not a legal hold</span>
+    It is a fixed timer that auto-expires, and it is described that way everywhere in the code, the API
+    responses and this document. A timer that quietly expires mid-dispute would be a liability
+    disguised as a safeguard. Relying on it for an actual dispute needs legal sign-off that this
+    codebase does not attempt to assert.
+  </div>
+
+  <h3>4.5 Isolation instead of AV scanning <span class="tag t3">Tier 3 substitute</span></h3>
+  <p>The preprocessing worker opens attacker-supplied media with no antivirus in front of it. It runs
+  on an internal-only network with no route off the host, read-only root filesystem, all capabilities
+  dropped, <code>no-new-privileges</code>, a <code>noexec</code> tmpfs, and process and memory caps.</p>
+
+  <h3>4.6 Resilience and honest failure</h3>
+  <ul>
+    <li><strong>DLQ</strong> — bounded retries, then dead-letter with a log line, rather than silent loss or infinite retry.</li>
+    <li><strong>Durable status</strong> — Redis runs with AOF and RDB enabled, and the service refuses to start without it, so a restart cannot vaporise in-flight job state.</li>
+    <li><strong>Crash recovery</strong> — a sweeper finds completed jobs still holding bytes and finishes the deletion, subject to the same hold gate.</li>
+  </ul>
+
+  <h3>4.7 Advisories attached to every result</h3>
+  <p>Results carry machine-readable advisories stating that scores are manipulable by adversarial
+  perturbation, and — while the stub backend is active — that the score is a placeholder rather than a
+  detection.</p>
+</section>
+
+<!-- ============ 5. STACK ============ -->
+<section>
+  <h2>5. Technology Stack</h2>
+
+  <table>
+    <thead><tr><th style="width:22%">Layer</th><th style="width:30%">Choice</th><th>Rationale</th></tr></thead>
+    <tbody>
+      <tr><td>API</td><td>Python 3.11, FastAPI, Uvicorn</td><td>Native async for WebSocket status push; typed request/response models.</td></tr>
+      <tr><td>Models</td><td>PyTorch, EfficientNet</td><td>Strong accuracy-per-FLOP; separate face and audio models, each with its own calibration.</td></tr>
+      <tr><td>Calibration</td><td>Temperature scaling</td><td>Cheap, monotonic, needs only a held-out set. Launch snapshot only.</td></tr>
+      <tr><td>Database</td><td>PostgreSQL 16 (psycopg3)</td><td>Transactional audit trail; JSONB for aggregation params; partial indexes drive the sweepers.</td></tr>
+      <tr><td>Queue &amp; status</td><td>Redis 7 (AOF + RDB)</td><td>One dependency for both work queue and live status. Persistence is mandatory, not default.</td></tr>
+      <tr><td>Object storage</td><td>MinIO locally, S3 deployed (boto3)</td><td>Identical presigned-upload semantics in both; MinIO disappears from compose in a deployed environment.</td></tr>
+      <tr><td>Packaging</td><td>Docker, Docker Compose</td><td>One image per service; network isolation expressed declaratively.</td></tr>
+      <tr><td>GPU</td><td>NVIDIA CUDA via WSL2 passthrough</td><td>Verified on an RTX 4060 (8 GB) before any weights were wired in.</td></tr>
+      <tr><td>Testing</td><td>pytest, compose smoke test</td><td>139 unit/integration tests plus a live-stack script that asserts against real Postgres and object storage.</td></tr>
+      <tr><td>Supply chain</td><td>gitleaks</td><td>Full-history secrets scan gates every push to the public remote.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="t">Why not Kubernetes yet</span>
+    Cluster provisioning, secrets, ingress and persistent volumes are multi-day work on their own, and on a
+    single GPU node they buy nothing the compose stack does not already do. Compose runs the identical service
+    decomposition, so the migration stays a packaging change rather than a redesign. The trigger is a second
+    node, a real availability requirement, or autoscaling the GPU pod — that last one being the cost driver.
+    Now that the delivery deadline has been lifted, this is schedulable rather than deferred; available time is
+    not by itself the reason to do it.
+  </div>
+</section>
+
+<!-- ============ 6. PLAN ============ -->
+<section class="break">
+  <h2>6. Implementation Plan</h2>
+
+  <p>Hardening is deferred in explicit tiers. The point of naming tiers is that nothing gets skipped
+  silently — a deferred item is written down as deferred, not quietly omitted.</p>
+
+  <p>The phases below are the delivery record of the original five-day build. That deadline has since
+  been lifted, so the tiers now describe dependency and order rather than what fits in a week. Some
+  deferrals were justified purely by the clock and are now open; others were gated on something real —
+  trained weights, a held-out calibration set, legal sign-off — and are unchanged by having more time.
+  Available time schedules work; it does not by itself justify building something half-way.</p>
+
+  <table>
+    <thead><tr><th style="width:12%">Phase</th><th style="width:30%">Deliverable</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Day 1</b></td><td>Skeleton &amp; contracts</td>
+        <td>Schema with the hold flag, config, storage abstraction, queue and DLQ semantics, rate limiter.</td>
+      </tr>
+      <tr>
+        <td><b>Day 2</b></td><td>Ingest &amp; isolation</td>
+        <td>Presigned upload, gateway endpoints, WebSocket status. CPU preprocessing worker <em>with</em> its container lockdown — isolation ships with the parser, not after it.</td>
+      </tr>
+      <tr>
+        <td><b>Day 3</b></td><td>Scoring &amp; routing</td>
+        <td>Inference workers behind a swappable backend, aggregation, worst-case face rollup, band routing, review flags.</td>
+      </tr>
+      <tr>
+        <td><b>Day 4</b></td><td>Retention</td>
+        <td>TTL deletion, hold gate across all three delete triggers, extended retention window, crash-recovery sweeper.</td>
+      </tr>
+      <tr>
+        <td><b>Day 5</b></td><td>End-to-end proof</td>
+        <td>Compose stack running end-to-end, smoke test asserting against real Postgres and buckets, GPU passthrough verified.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>6.1 Current status</h3>
+  <table class="status">
+    <tbody>
+      <tr><td>✔</td><td>Compose stack runs end-to-end; smoke test passes every check</td></tr>
+      <tr><td>✔</td><td>139 automated tests passing</td></tr>
+      <tr><td>✔</td><td>Deletion verified against the storage backend — objects confirmed absent, not merely flagged</td></tr>
+      <tr><td>✔</td><td>Hold gate tested across all three delete triggers, held and unheld</td></tr>
+      <tr><td>✔</td><td>Every status the schema permits has a sweep path, checked against the SQL that runs rather than a restatement of it</td></tr>
+      <tr><td>✔</td><td>Failed jobs report why, on both the WebSocket and the polling view</td></tr>
+      <tr><td>✔</td><td>Audit trail asserted by reading Postgres columns back, not trusting the API response</td></tr>
+      <tr><td>✔</td><td>Upload size cap proven enforced by object storage (oversized upload rejected)</td></tr>
+      <tr><td>✔</td><td>GPU passthrough verified end-to-end before wiring the model backend</td></tr>
+      <tr><td>◻</td><td>Trained weights not yet wired — the stub backend is active by default</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.2 Next</h3>
+  <ul>
+    <li>Wire the PyTorch backend and load real face and audio weights; run the launch calibration pass separately for each model.</li>
+    <li>Replace the review flag with a reviewer-facing surface once there is a reviewer.</li>
+    <li>Redis Streams consumer groups, isotonic calibration, per-retrain recalibration.</li>
+    <li>Adversarial-input pre-classifier — the largest known gap, deliberately not half-built.</li>
+  </ul>
+
+  <h3>6.3 Stated limitations</h3>
+  <div class="callout warn">
+    <span class="t">What this system does not claim</span>
+    <ul style="margin-bottom:0">
+      <li><strong>No adversarial robustness.</strong> Scores are manipulable by adversarial perturbation of the input. This is documented, not hidden, and every result says so.</li>
+      <li><strong>No legal hold.</strong> The extended retention window is a fixed timer that auto-expires.</li>
+      <li><strong>No production-validated calibration.</strong> Calibration is a launch snapshot, not tied to a recalibration pipeline.</li>
+      <li><strong>No compliance assertion.</strong> Scoped deletion and a partial audit trail are meaningfully better than nothing, but compliance is a legal determination this codebase does not get to make.</li>
+      <li><strong>Not a detector yet.</strong> The default backend is a deterministic stub that derives a score from a hash of the input. It exists so the pipeline could be built and proven before weights landed. It carries no detection meaning, and says so in every result it produces.</li>
+    </ul>
+  </div>
+
+  <p style="margin-top:10px; color:var(--muted); font-size:9pt;">
+    The last point is the one most worth stating plainly: what has been proven so far is that the
+    <em>system</em> works end to end — ingest, scoring, aggregation, routing, deletion and audit. What
+    has not been proven is <em>detection accuracy</em>, which is a property of weights that are not yet
+    loaded. Conflating the two would be the single most misleading thing this document could do.
+  </p>
+</section>
