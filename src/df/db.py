@@ -93,8 +93,9 @@ class Db:
             cur.executemany(
                 """
                 INSERT INTO job_items
-                    (job_id, item_index, item_kind, face_index, score, confidence, object_key)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (job_id, item_index, item_kind, face_index, score, confidence,
+                     object_key, model_version_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (job_id, item_index, face_index) DO NOTHING
                 """,
                 [
@@ -106,10 +107,29 @@ class Db:
                         i["score"],
                         i["confidence"],
                         i.get("object_key"),
+                        i.get("model_version_id"),
                     )
                     for i in items
                 ],
             )
+
+    def item_model_versions(self, job_id: str) -> list[str]:
+        """Which models actually produced this job's surviving rows.
+
+        The router attributes the job's score to this rather than to the queue
+        message, so the recorded model is the one whose numbers were used.
+        More than one value means the job was scored by two different models --
+        reachable during a rolling deploy when duplicate delivery lets each
+        consumer win some items.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT model_version_id FROM job_items "
+                "WHERE job_id = %s AND model_version_id IS NOT NULL "
+                "ORDER BY model_version_id",
+                (job_id,),
+            ).fetchall()
+        return [r["model_version_id"] for r in rows]
 
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         with self.conn() as c:

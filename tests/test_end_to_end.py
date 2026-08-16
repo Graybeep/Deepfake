@@ -437,3 +437,74 @@ def test_audio_chunks_are_deduplicated_too():
     db.insert_items("job-audio", [dict(row)])
 
     assert len(db.get_items("job-audio")) == 1, "audio chunk stored twice"
+
+
+# --- model attribution ------------------------------------------------------
+
+
+def test_the_job_is_attributed_to_the_model_that_produced_the_surviving_rows():
+    """ON CONFLICT DO NOTHING decides that one row survives, not which one.
+
+    The router used to take model_version_id from the queue message while
+    computing the score from the stored rows, so during a rolling deploy the
+    consumer whose rows LOST the conflict could still win the job row. Score
+    from v1's numbers, stored as if v2 produced it -- and nothing recorded the
+    producer per row, so it was undetectable afterwards.
+    """
+    h = Harness("video", b"pretend-video-bytes-with-faces", job_id="job-attrib")
+    h.queue.pop(TOPIC_PREPROCESS)
+    cpu_preprocess.handle(
+        Message(topic=TOPIC_PREPROCESS,
+                payload={"job_id": "job-attrib", "media_type": "video"}),
+        db=h.db, storage=h.storage, queue=h.queue, status=h.status,
+    )
+    gpu_inference.handle(
+        h.queue.pop(TOPIC_INFERENCE),
+        db=h.db, storage=h.storage, queue=h.queue, status=h.status,
+    )
+
+    # A second consumer, mid rolling deploy, announces a different model.
+    aggregate_msg = h.queue.pop(TOPIC_AGGREGATE)
+    aggregate_msg.payload["model_version_id"] = "face-OTHER-v9"
+
+    router_worker.handle(aggregate_msg, db=h.db, storage=h.storage, status=h.status)
+
+    stored = h.db.jobs["job-attrib"]["model_version_id"]
+    produced = h.db.item_model_versions("job-attrib")
+    assert stored in produced, (
+        f"job attributed to {stored!r} but its rows were scored by {produced}"
+    )
+    assert stored != "face-OTHER-v9", "message payload overrode the actual producer"
+
+
+def test_a_job_scored_by_two_models_is_refused_rather_than_attributed():
+    """If each model won some items the score is a blend of both, and no single
+    model_version_id makes it reproducible. Better to fail loudly than store a
+    verdict whose provenance is a guess."""
+    db = FakeDb()
+    db.add_job("job-mixed", "video")
+    db.insert_items("job-mixed", [
+        {"item_index": 0, "item_kind": "frame", "face_index": 0, "score": 10.0,
+         "confidence": 0.9, "object_key": "a", "model_version_id": "face-v1"},
+        {"item_index": 1, "item_kind": "frame", "face_index": 0, "score": 90.0,
+         "confidence": 0.9, "object_key": "b", "model_version_id": "face-v2"},
+    ])
+
+    with pytest.raises(ValueError, match="multiple model versions"):
+        router_worker.handle(
+            Message(topic=TOPIC_AGGREGATE,
+                    payload={"job_id": "job-mixed", "media_type": "video",
+                             "model_version_id": "face-v1"}),
+            db=db, storage=InMemoryStorage(), status=FakeJobStatus(),
+        )
+
+
+def test_every_item_row_records_which_model_scored_it():
+    h = Harness("video", b"pretend-video-bytes-with-faces", job_id="job-prov")
+    h.run()
+
+    rows = h.db.get_items("job-prov")
+    assert rows, "no rows to check"
+    assert all(r.get("model_version_id") for r in rows), (
+        "an item row has no recorded producer"
+    )

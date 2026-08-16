@@ -51,6 +51,12 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                 # drove a flagged score, rather than rebuilding key names by
                 # convention and silently missing when the layout changes.
                 "object_key": item["key"],
+                # Which weights produced THIS number. The job row's
+                # model_version_id is derived from the rows that survive, not
+                # from this worker's message -- during a rolling deploy the two
+                # can disagree, and the surviving rows are the ones that were
+                # actually used to compute the score.
+                "model_version_id": detector.version.model_version_id,
             })
 
     db.insert_items(job_id, rows)

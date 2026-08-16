@@ -163,3 +163,26 @@ Two gaps remain, both about what an in-process suite structurally cannot see:
 
 So: run `scripts/smoke_compose.py` against a live stack before treating "the tests
 pass" as "the system works."
+
+## Standing practice: prove the test fails first
+Any test written to catch a specific bug must be **shown to go red before the fix is
+in place**. Revert the fix, or disable the mechanism the test leans on, run the test,
+confirm it fails, restore. A regression test that was never observed failing is not
+evidence of anything — it may be asserting something that was already true.
+
+This is not hypothetical. Three tests here passed without observing the thing they
+named, each caught only by later inspection:
+- `FakeDb` accepted `executemany` on a Connection, so the whole suite stayed green
+  while the real DB write path was broken against psycopg3.
+- The duplicate-delivery test asserted the aggregate *score*, which does not move
+  under exact duplication — `rollup` takes `max`, which is idempotent. It passed
+  identically with the natural key reverted.
+- The group-recreate probe pushed its message *after* deleting the group, so it was
+  satisfied whether the group came back at `0` or at `$`, and `$` abandons everything
+  already in the stream.
+
+Three instances is a pattern, not bad luck, and the tell is the same every time: the
+test never observed the thing its name claims. The check is cheap and mechanical — do
+it while writing the test. Mutating the fake is usually enough and touches no
+production source; see the scratch harness pattern used for the model-attribution
+tests.

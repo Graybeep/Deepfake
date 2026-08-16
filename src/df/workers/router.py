@@ -46,13 +46,30 @@ def _driving_keys(used_items, rows: list[dict]) -> list[str]:
 def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobStatus) -> None:
     job_id = msg.payload["job_id"]
     media_type = msg.payload["media_type"]
-    model_version_id = msg.payload["model_version_id"]
 
     db.set_status(job_id, "aggregating")
     status.publish(job_id, "aggregating")
 
     rows = db.get_items(job_id)
     items, max_faces = rollup_items(rows)
+
+    # Attribute the score to the model that produced the rows it was computed
+    # from -- not to whichever message happened to arrive. Duplicate delivery
+    # puts two aggregate messages in flight, write_result is an UPDATE, and the
+    # payload's model version can belong to a consumer whose rows lost the
+    # ON CONFLICT race. The rows are the evidence; the message is hearsay.
+    observed = db.item_model_versions(job_id)
+    if len(observed) > 1:
+        # Two models each won some items. The score is a blend of both, so no
+        # single model_version_id makes it reproducible, and CLAUDE.md does not
+        # permit storing a result whose provenance is a guess. Fail loudly:
+        # this dead-letters with the reason attached rather than emitting an
+        # unauditable verdict.
+        raise ValueError(
+            f"job {job_id} has items scored by multiple model versions {observed}; "
+            "refusing to attribute one score to one of them"
+        )
+    model_version_id = observed[0] if observed else msg.payload["model_version_id"]
 
     if media_type == "audio":
         face_count = None

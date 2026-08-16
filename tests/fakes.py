@@ -98,6 +98,18 @@ class FakeDb:
             seen.add(key)
             existing.append(row)
 
+    def item_model_versions(self, job_id: str) -> list[str]:
+        """Mirrors the real DISTINCT query, including dropping NULLs.
+
+        Rows written before migration 003 have no recorded producer; counting
+        them as a distinct version would make every pre-migration job look
+        mixed.
+        """
+        return sorted({
+            r["model_version_id"] for r in self.items.get(job_id, [])
+            if r.get("model_version_id") is not None
+        })
+
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         return sorted(
             self.items.get(job_id, []),
