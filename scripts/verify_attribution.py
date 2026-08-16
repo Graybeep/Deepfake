@@ -42,11 +42,11 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         failures.append(label)
 
 
-def rows_for(model: str, lo: int, hi: int) -> list[dict]:
+def rows_for(model: str, lo: int, hi: int, score: float | None = None) -> list[dict]:
     return [
         {
             "item_index": i, "item_kind": "frame", "face_index": 0,
-            "score": 10.0 if model.endswith("v1") else 90.0,
+            "score": score if score is not None else (10.0 if model.endswith("v1") else 90.0),
             "confidence": 0.9, "object_key": f"derived/x/f{i}.png",
             "model_version_id": model,
         }
@@ -112,11 +112,14 @@ def main() -> int:
     )
     db.set_status(straddle, "queued")
 
-    pre = rows_for("ignored", 0, 3)
+    # All scores low on purpose, so this job lands in a band that raises NO
+    # flag of its own. Otherwise the band's flag masks the question being
+    # asked: is the provenance flag independent, or was it riding along?
+    pre = rows_for("ignored", 0, 3, score=5.0)
     for r in pre:
         r["model_version_id"] = None          # written before migration 003
     db.insert_items(straddle, pre)
-    db.insert_items(straddle, rows_for("face-probe-v1", 3, 6))
+    db.insert_items(straddle, rows_for("face-probe-v1", 3, 6, score=5.0))
 
     observed = db.item_model_versions(straddle)
     check("NULL producers are excluded, not counted as a second model",
@@ -141,6 +144,39 @@ def main() -> int:
         ]
     check("partial provenance is recorded, not silently treated as full",
           "router.partial_provenance" in events, str(events))
+
+    # Recorded is not visible. An event nobody queries is the same failure as
+    # letting the 60-80 band pass silently, so it must reach the DB-flag path
+    # the bands use -- and independently of the band, since this job routed to
+    # a class that raises no flag of its own.
+    with db.conn() as c:
+        flags = c.execute(
+            "SELECT reason, urgency, resolved_at FROM review_flags WHERE job_id = %s",
+            (straddle,),
+        ).fetchall()
+
+    provenance_flags = [f for f in flags if "partial provenance" in f["reason"]]
+    check("partial provenance raises a review flag", len(provenance_flags) == 1,
+          f"{len(flags)} flag(s) total")
+    check(
+        "it is the ONLY flag -- not riding along on a band flag",
+        len(flags) == 1,
+        f"reasons: {[f['reason'][:40] for f in flags]}",
+    )
+    if provenance_flags:
+        f = provenance_flags[0]
+        check("flagged at low urgency", f["urgency"] == "low", str(f["urgency"]))
+        check("flag is open, not pre-resolved", f["resolved_at"] is None)
+        check("reason names the counts and the attribution",
+              "3/6" in f["reason"] and "face-probe-v1" in f["reason"], f["reason"])
+
+    band = db.get_job(straddle)["band"]
+    check(
+        "flag was raised even though the band asks for none",
+        band in {"likely_authentic", "leaning_authentic"},
+        f"band={band} -- this job routes to no band flag of its own, so the "
+        f"provenance flag is the only thing making it visible",
+    )
 
     print("\n" + ("all attribution checks passed" if not failures
                   else f"FAILURES: {failures}"))

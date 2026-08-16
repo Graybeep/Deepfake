@@ -14,7 +14,7 @@ import logging
 
 from df import storage as storage_mod
 from df.aggregation import aggregate, aggregate_identity
-from df.bands import ResultClass, route
+from df.bands import ResultClass, ReviewUrgency, route
 from df.db import Db
 from df.jobstatus import JobStatus
 from df.notify import notify_review_flag
@@ -148,6 +148,31 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         urgency = routing.review_urgency.value
         db.flag_for_review(job_id, reason, urgency)
         notify_review_flag(job_id, reason, agg.score, routing.band.value, urgency=urgency)
+
+    # Recorded is not the same as visible. An event in job_events is only found
+    # by someone who already suspects something and goes looking, which is the
+    # same failure mode as leaving the 60-80 band to pass silently into
+    # deletion. Partial provenance means the stored model_version_id is true of
+    # most of this job's rows but not all of them, and the job row IS the audit
+    # trail -- so it goes through the same DB-flag-plus-alert path the bands
+    # use. Independent of routing.flag_for_review on purpose: a likely_authentic
+    # job with partial provenance raises no band flag and would otherwise be
+    # completely silent.
+    #
+    # Low urgency: this is an attribution caveat on a result that is otherwise
+    # sound, not a detection severity, and it is confined to jobs straddling the
+    # migration-003 deploy. Flagged so it is never a silent pass-through; not
+    # paging anyone.
+    if unattributed and observed:
+        reason = (
+            f"partial provenance: {unattributed}/{len(rows)} item rows carry no "
+            f"recorded model version; result attributed to {model_version_id}"
+        )
+        db.flag_for_review(job_id, reason, ReviewUrgency.LOW.value)
+        notify_review_flag(
+            job_id, reason, agg.score, routing.band.value,
+            urgency=ReviewUrgency.LOW.value,
+        )
 
     # Tier 1: TTL delete on inference completion. Checks the hold flag first.
     report = delete_media_for_job(job_id, db, storage)
