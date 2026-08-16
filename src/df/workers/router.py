@@ -71,6 +71,25 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         )
     model_version_id = observed[0] if observed else msg.payload["model_version_id"]
 
+    # Rows written before migration 003 carry no producer. item_model_versions
+    # drops NULLs, so a job straddling that deploy -- some rows recorded, some
+    # not -- reads as a single model and is attributed to it rather than
+    # refused. That is the right default (refusing legitimate jobs mid-migration
+    # would be worse than the ambiguity), but it means partial provenance is
+    # being treated as full provenance, so say so in the audit trail instead of
+    # letting the row imply more certainty than was observed.
+    unattributed = sum(1 for r in rows if r.get("model_version_id") is None)
+    if unattributed and observed:
+        db.record_event(job_id, "router.partial_provenance", {
+            "rows_without_model_version": unattributed,
+            "rows_total": len(rows),
+            "attributed_to": model_version_id,
+        })
+        log.warning(
+            "job=%s attributed to %s but %d/%d item rows have no recorded producer",
+            job_id, model_version_id, unattributed, len(rows),
+        )
+
     if media_type == "audio":
         face_count = None
         agg = aggregate(items)

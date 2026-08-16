@@ -135,7 +135,8 @@ class Db:
         with self.conn() as c:
             return c.execute(
                 """
-                SELECT item_index, item_kind, face_index, score, confidence, object_key
+                SELECT item_index, item_kind, face_index, score, confidence,
+                       object_key, model_version_id
                   FROM job_items WHERE job_id = %s ORDER BY item_index, face_index
                 """,
                 (job_id,),
