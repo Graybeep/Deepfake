@@ -25,6 +25,10 @@ class FakeRetentionStore:
         self.terminal_undeleted: list[str] = []
         # job_id -> created_at, for jobs still sitting in awaiting_upload.
         self.awaiting_upload: dict[str, dt.datetime] = {}
+        # job_id -> updated_at, for jobs parked in an in-flight state.
+        self.in_flight: dict[str, dt.datetime] = {}
+        # job_id -> error, for jobs a sweep moved to a terminal state.
+        self.failed: dict[str, str] = {}
         self.cold_deleted: dict[str, dt.datetime] = {}
 
     def add(
@@ -79,6 +83,17 @@ class FakeRetentionStore:
 
     def find_undeleted_terminal(self, limit: int = 100) -> list[str]:
         return self.terminal_undeleted[:limit]
+
+    def find_stalled_in_flight(self, older_than, limit: int = 100) -> list[str]:
+        return [
+            jid for jid, updated in self.in_flight.items()
+            if updated < older_than
+        ][:limit]
+
+    def mark_job_failed(self, job_id: str, error: str) -> None:
+        self.failed[job_id] = error
+        self.in_flight.pop(job_id, None)
+        self.awaiting_upload.pop(job_id, None)
 
     def find_abandoned_uploads(self, older_than, limit: int = 100) -> list[str]:
         return [

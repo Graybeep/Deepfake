@@ -34,14 +34,17 @@ class FakeDb:
         derived_prefix: str | None = None,
         status: str = "queued",
         created_at: dt.datetime | None = None,
+        updated_at: dt.datetime | None = None,
     ) -> None:
         self.jobs[job_id] = {
             "id": job_id,
             "media_type": media_type,
             "status": status,
-            # NOT NULL DEFAULT now() in the real schema; the abandoned-upload
-            # sweep keys off it, so the fake has to carry it too.
+            # Both NOT NULL DEFAULT now() in the real schema. The abandoned
+            # sweep keys off created_at and the stalled sweep off updated_at,
+            # so the fake has to carry both rather than a simplification.
             "created_at": created_at or dt.datetime.now(dt.timezone.utc),
+            "updated_at": updated_at or created_at or dt.datetime.now(dt.timezone.utc),
             "attempts": 0,
             "content_hash": None,
             "retention_hold": retention_hold,
@@ -67,6 +70,8 @@ class FakeDb:
     # --- job lifecycle ---
     def set_status(self, job_id: str, status: str, *, error: str | None = None) -> None:
         self.jobs[job_id]["status"] = status
+        # The real UPDATE sets updated_at = now(); the stalled sweep reads it.
+        self.jobs[job_id]["updated_at"] = dt.datetime.now(dt.timezone.utc)
         if error:
             self.jobs[job_id]["error"] = error
 
@@ -173,6 +178,19 @@ class FakeDb:
             and not j["retention_hold"]
             and (j["raw_deleted_at"] is None or j["derived_deleted_at"] is None)
         ][:limit]
+
+    def find_stalled_in_flight(self, older_than, limit: int = 100) -> list[str]:
+        """Held jobs are NOT excluded -- this marks failed, it does not delete."""
+        return [
+            jid for jid, j in self.jobs.items()
+            if j.get("status") in {"queued", "preprocessing", "inference", "aggregating"}
+            and j.get("updated_at") is not None
+            and j["updated_at"] < older_than
+        ][:limit]
+
+    def mark_job_failed(self, job_id: str, error: str) -> None:
+        self.jobs[job_id]["status"] = "failed"
+        self.jobs[job_id]["error"] = error
 
     def find_abandoned_uploads(self, older_than, limit: int = 100) -> list[str]:
         return [

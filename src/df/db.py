@@ -278,6 +278,51 @@ class Db:
             ).fetchall()
         return [str(r["id"]) for r in rows]
 
+    def find_stalled_in_flight(self, older_than: dt.datetime, limit: int = 100) -> list[str]:
+        """Jobs stuck mid-pipeline with nothing left to move them along.
+
+        The in-flight states are transient only while the queue message that
+        drives them exists. It can stop existing: the gateway and the workers
+        both commit the status change to Postgres BEFORE pushing to Redis, so a
+        crash between the two -- or Redis losing the push inside its AOF
+        everysec window -- leaves a row claiming 'queued' with no message
+        behind it. requeue_stale_processing does not help; it recovers messages
+        stranded in the processing list, not ones that were never pushed.
+
+        Such a job never completes and never dead-letters, so no other sweep
+        will ever look at it while it holds a raw upload.
+
+        Held jobs are deliberately NOT excluded here. This marks a job failed;
+        it does not delete anything. The hold flag protects media, and the
+        delete path that follows applies it as usual.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                """
+                SELECT id FROM jobs
+                 WHERE status IN ('queued', 'preprocessing', 'inference', 'aggregating')
+                   AND updated_at < %s
+                 ORDER BY updated_at
+                 LIMIT %s
+                """,
+                (older_than, limit),
+            ).fetchall()
+        return [str(r["id"]) for r in rows]
+
+    def mark_job_failed(self, job_id: str, error: str) -> None:
+        """Move a job to a terminal state so it stops being invisible.
+
+        Without this, a swept job keeps its non-terminal status forever: the
+        media is gone but the row accumulates, and nothing downstream can tell
+        a dead job from a live one.
+        """
+        with self.conn() as c, c.transaction():
+            c.execute(
+                "UPDATE jobs SET status = 'failed', error = %s, updated_at = now() "
+                "WHERE id = %s",
+                (error, job_id),
+            )
+
     def find_abandoned_uploads(self, older_than: dt.datetime, limit: int = 100) -> list[str]:
         """Jobs that got an upload grant and never came back.
 

@@ -88,6 +88,13 @@ class Settings:
     abandoned_upload_hours: int = field(
         default_factory=lambda: _int("DF_ABANDONED_UPLOAD_HOURS", 24)
     )
+    # Age at which a job still in an in-flight state is treated as stalled --
+    # its queue message is gone and nothing will advance it. Must exceed the
+    # slowest realistic job by a wide margin: failing a merely-slow job is
+    # recoverable by resubmitting, but never sweeping retains media forever.
+    stalled_job_hours: int = field(
+        default_factory=lambda: _int("DF_STALLED_JOB_HOURS", 6)
+    )
 
     # queue / DLQ
     max_attempts: int = field(default_factory=lambda: _int("DF_MAX_ATTEMPTS", 3))

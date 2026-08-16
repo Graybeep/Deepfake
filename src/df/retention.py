@@ -79,6 +79,10 @@ class RetentionStore(Protocol):
     def find_abandoned_uploads(
         self, older_than: dt.datetime, limit: int = 100
     ) -> list[str]: ...
+    def find_stalled_in_flight(
+        self, older_than: dt.datetime, limit: int = 100
+    ) -> list[str]: ...
+    def mark_job_failed(self, job_id: str, error: str) -> None: ...
     def find_expired_extended_retention(
         self, now: dt.datetime, limit: int = 100
     ) -> list[str]: ...
@@ -314,6 +318,56 @@ def sweep_abandoned_uploads(
 
     reports: list[DeleteReport] = []
     for job_id in store.find_abandoned_uploads(cutoff, limit=limit):
+        report = delete_media_for_job(job_id, store, storage, now=now)
+        if report.outcome is not DeleteOutcome.SKIPPED_HOLD:
+            # Terminal, so the row stops sitting in awaiting_upload forever.
+            # Clearing the bytes without moving the status leaves a table that
+            # only grows -- a smaller problem than retained media, but still a
+            # dead row nothing can distinguish from a live one.
+            store.mark_job_failed(job_id, "upload grant abandoned; client never notified")
+        reports.append(report)
+    return reports
+
+
+def sweep_stalled_jobs(
+    store: RetentionStore,
+    storage: storage_mod.Storage,
+    *,
+    older_than_hours: int | None = None,
+    limit: int = 100,
+    now: dt.datetime | None = None,
+) -> list[DeleteReport]:
+    """Fail jobs stuck mid-pipeline, then clear their media.
+
+    The in-flight states (queued, preprocessing, inference, aggregating) are
+    transient only while their queue message exists. Both the gateway and the
+    workers commit the status change before pushing to Redis, so a crash in
+    between -- or a push lost inside Redis's AOF everysec window -- strands the
+    row with no message to advance it. It will never complete and never
+    dead-letter, so no other sweep covers it while it holds a raw upload.
+
+    The threshold is a proxy for "no message exists", because the job row
+    cannot tell us that directly. Set it far above real processing time: the
+    cost of being wrong is failing a job that was merely slow, and the client
+    can resubmit, but the cost of never sweeping is media retained forever.
+
+    Marking failed first is what makes the media reachable: the job then falls
+    under the ordinary terminal delete path, hold flag and all.
+    """
+    now = now or _now()
+    hours = older_than_hours if older_than_hours is not None else settings.stalled_job_hours
+    cutoff = now - dt.timedelta(hours=hours)
+
+    reports: list[DeleteReport] = []
+    for job_id in store.find_stalled_in_flight(cutoff, limit=limit):
+        store.mark_job_failed(
+            job_id, f"stalled in-flight with no queue message for over {hours}h"
+        )
+        store.record_event(
+            job_id,
+            "job.stalled",
+            {"detected_at": now.isoformat(), "threshold_hours": hours},
+        )
         reports.append(delete_media_for_job(job_id, store, storage, now=now))
     return reports
 

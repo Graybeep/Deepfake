@@ -1,4 +1,9 @@
-"""Retention sweeper. Three passes, all hold-flag gated.
+"""Retention sweeper. Four passes, all hold-flag gated.
+
+Between them these cover every value the status CHECK constraint allows, which
+is the property worth preserving: two leaks were found by noticing media in the
+bucket, and both were a status the sweep query did not know to look for. Adding
+a status without giving it a path here recreates that bug.
 
 1. Backstop for the completion-triggered delete. Without it, a router worker
    that dies between committing a verdict and deleting the bytes leaves raw
@@ -7,11 +12,19 @@
    dead-lettered and failed jobs: those never fire the completion delete at all,
    so this is their only path to deletion.
 
-2. Abandoned uploads -- a client granted an upload URL that never notified.
-   Those jobs never enter the pipeline, so no terminal state is ever reached and
-   pass 1 would never see them, while the media sits in the bucket.
+2. Stalled in-flight jobs -- queued/preprocessing/inference/aggregating rows
+   whose queue message no longer exists. Both the gateway and the workers commit
+   the status change before pushing to Redis, so a crash in between strands the
+   row with nothing to advance it. It never completes and never dead-letters, so
+   pass 1 cannot see it. Marked failed first, which brings its media under the
+   ordinary terminal delete path.
 
-3. Enforcement of the extended retention window's fixed timer. A 30-day timer
+3. Abandoned uploads -- a client granted an upload URL that never notified.
+   Those jobs never enter the pipeline, so no terminal state is ever reached and
+   pass 1 would never see them, while the media sits in the bucket. Also marked
+   terminal, so the row does not sit in awaiting_upload forever.
+
+4. Enforcement of the extended retention window's fixed timer. A 30-day timer
    that nothing enforces silently becomes "retained forever", which is its own
    liability.
 """
@@ -26,6 +39,7 @@ from df.retention import (
     DeleteOutcome,
     sweep_abandoned_uploads,
     sweep_expired_windows,
+    sweep_stalled_jobs,
     sweep_undeleted,
 )
 
@@ -54,6 +68,17 @@ def main() -> None:
                 )
         except Exception:  # noqa: BLE001 - sweeper must survive a bad round
             log.exception("undeleted sweep failed, retrying next interval")
+
+        try:
+            stalled = sweep_stalled_jobs(db, storage, limit=200)
+            if stalled:
+                log.warning(
+                    "sweeper failed and cleared %d stalled job(s) -- stuck in an "
+                    "in-flight state with no queue message to advance them",
+                    len(stalled),
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("stalled job sweep failed, retrying next interval")
 
         try:
             abandoned = sweep_abandoned_uploads(db, storage, limit=200)
