@@ -84,11 +84,18 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
 - AV scanning — network-isolated, locked-down CPU worker containers substitute. Build
   this in the same phase as the CPU preprocessing worker, not later — a worker parsing
   untrusted video/audio before isolation exists is an open compromise window.
-- Redis Streams consumer groups, per-retrain recalibration, isotonic calibration —
-  these were "week 2+" under the old budget. They are gated on a dependency, not on
-  time: per-retrain recalibration and isotonic calibration both need real trained
-  weights and a held-out set, neither of which exists yet. Redis Streams is the one
-  item here that extra time genuinely unblocks.
+- Per-retrain recalibration and isotonic calibration — still deferred, and NOT because
+  of time. Both need real trained weights and a held-out set, neither of which exists
+  yet. More time does not unblock them; weights do.
+- Redis Streams consumer groups — **built 2026-08-16, no longer deferred.** Streams is
+  the default backend (`DF_QUEUE_BACKEND=streams`); the list backend is kept as a
+  rollback path and both write the same `q:<topic>:dead` list. Any live consumer can
+  reclaim a message whose worker stopped without acking it, once it has been idle past
+  `DF_QUEUE_RECLAIM_MS` — so recovery no longer requires a worker restart, and a topic
+  can have more than one consumer. Verified against a real Redis by
+  `scripts/verify_queue.py`, which must run inside a container: Redis is on the
+  internal network, and publishing a host port to test it would weaken the isolation
+  being tested.
 
 ## Deployment
 MVP: Docker + docker-compose, single GPU node, one image per service (gateway,

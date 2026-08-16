@@ -98,6 +98,18 @@ class Settings:
 
     # queue / DLQ
     max_attempts: int = field(default_factory=lambda: _int("DF_MAX_ATTEMPTS", 3))
+    # "streams" (consumer groups) or "lists" (the original BRPOPLPUSH handoff,
+    # kept as a rollback path).
+    queue_backend: str = field(
+        default_factory=lambda: os.environ.get("DF_QUEUE_BACKEND", "streams")
+    )
+    # How long a taken-but-unacked message must sit idle before another
+    # consumer may claim it. Too low and a slow-but-healthy worker has its work
+    # stolen and done twice; too high and a dead worker's jobs stall. Must
+    # exceed the slowest expected handler by a comfortable margin.
+    queue_reclaim_ms: int = field(
+        default_factory=lambda: _int("DF_QUEUE_RECLAIM_MS", 120_000)
+    )
 
     # sampling
     video_fps_sample: float = field(default_factory=lambda: _float("DF_VIDEO_FPS_SAMPLE", 2.0))

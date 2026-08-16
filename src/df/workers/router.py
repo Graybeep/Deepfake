@@ -18,7 +18,7 @@ from df.bands import ResultClass, route
 from df.db import Db
 from df.jobstatus import JobStatus
 from df.notify import notify_review_flag
-from df.queue import TOPIC_AGGREGATE, Message, RedisQueue
+from df.queue import TOPIC_AGGREGATE, Message, Queue, build_queue
 from df.retention import delete_media_for_job, open_extended_retention_window
 from df.rollup import rollup_items
 from df.workers.loop import run_worker
@@ -128,7 +128,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
 
 def main() -> None:
     db, storage = Db(), storage_mod.build_storage()
-    queue, status = RedisQueue(), JobStatus()
+    queue, status = build_queue(), JobStatus()
     run_worker(
         TOPIC_AGGREGATE,
         lambda m: handle(m, db=db, storage=storage, status=status),

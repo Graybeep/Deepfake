@@ -286,8 +286,9 @@ class Db:
         both commit the status change to Postgres BEFORE pushing to Redis, so a
         crash between the two -- or Redis losing the push inside its AOF
         everysec window -- leaves a row claiming 'queued' with no message
-        behind it. requeue_stale_processing does not help; it recovers messages
-        stranded in the processing list, not ones that were never pushed.
+        behind it. Neither queue backend can recover that: Streams reclaim and
+        the list backend's requeue both recover a message that exists but was
+        abandoned, not one that was never written.
 
         Such a job never completes and never dead-letters, so no other sweep
         will ever look at it while it holds a raw upload.

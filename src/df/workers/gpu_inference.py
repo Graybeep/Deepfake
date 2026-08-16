@@ -14,7 +14,7 @@ from df import storage as storage_mod
 from df.db import Db
 from df.inference.registry import get_audio_model, get_face_model
 from df.jobstatus import JobStatus
-from df.queue import TOPIC_AGGREGATE, TOPIC_INFERENCE, Message, RedisQueue
+from df.queue import TOPIC_AGGREGATE, TOPIC_INFERENCE, Message, Queue, build_queue
 from df.workers.loop import run_worker
 
 log = logging.getLogger("df.worker.gpu")
@@ -22,7 +22,7 @@ log = logging.getLogger("df.worker.gpu")
 BATCH_SIZE = 32
 
 
-def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: RedisQueue, status: JobStatus) -> None:
+def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, status: JobStatus) -> None:
     job_id = msg.payload["job_id"]
     media_type = msg.payload["media_type"]
     manifest = msg.payload["manifest"]
@@ -70,7 +70,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: RedisQu
 
 def main() -> None:
     db, storage = Db(), storage_mod.build_storage()
-    queue, status = RedisQueue(), JobStatus()
+    queue, status = build_queue(), JobStatus()
     run_worker(
         TOPIC_INFERENCE,
         lambda m: handle(m, db=db, storage=storage, queue=queue, status=status),

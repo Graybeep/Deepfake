@@ -22,7 +22,7 @@ from df import storage as storage_mod
 from df.config import settings
 from df.db import Db
 from df.jobstatus import JobStatus, assert_persistence_enabled
-from df.queue import TOPIC_PREPROCESS, RedisQueue
+from df.queue import TOPIC_PREPROCESS, Queue, build_queue
 from df.ratelimit import RateLimiter
 
 log = logging.getLogger("df.gateway")
@@ -31,7 +31,7 @@ app = FastAPI(title="Deepfake Detection API", version="0.1.0")
 
 _db = Db()
 _storage: storage_mod.Storage | None = None
-_queue: RedisQueue | None = None
+_queue: Queue | None = None
 _status: JobStatus | None = None
 _limiter: RateLimiter | None = None
 
@@ -42,7 +42,7 @@ MEDIA_TYPES = {"video", "image", "audio"}
 def _startup() -> None:
     global _storage, _queue, _status, _limiter
     _storage = storage_mod.build_storage()
-    _queue = RedisQueue()
+    _queue = build_queue()
     _status = JobStatus()
     _limiter = RateLimiter()
     # Fail fast rather than discover on the first restart that every in-flight

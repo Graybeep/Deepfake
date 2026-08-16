@@ -8,7 +8,7 @@ from typing import Callable
 
 from df.db import Db
 from df.jobstatus import JobStatus
-from df.queue import Message, RedisQueue
+from df.queue import Message, Queue, build_queue
 
 log = logging.getLogger("df.worker")
 
@@ -25,7 +25,7 @@ def run_worker(
     topic: str,
     handler: Callable[[Message], None],
     *,
-    queue: RedisQueue | None = None,
+    queue: Queue | None = None,
     db: Db | None = None,
     status: JobStatus | None = None,
 ) -> None:
@@ -35,7 +35,7 @@ def run_worker(
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
 
-    queue = queue or RedisQueue()
+    queue = queue or build_queue()
     db = db or Db()
     status = status or JobStatus()
 
