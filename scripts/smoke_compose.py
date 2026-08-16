@@ -255,6 +255,33 @@ def main() -> int:
     check("every item row carries a confidence", confident == total, f"{confident}/{total}")
     print(f"      {total} job_items rows written\n")
 
+    # 5c. one item, one row. Streams reclaim can deliver the same message to a
+    # second consumer when the first is slow rather than dead, so the write has
+    # to be idempotent at the database, not just in the handler.
+    idx = _psql(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'job_items_natural_key';"
+    )
+    check("natural-key index present", len(idx) == 1, str(idx))
+    check(
+        "index covers NULL face_index (audio chunks)",
+        "NULLS NOT DISTINCT" in idx[0][0],
+        "without this, audio chunks bypass the constraint while video is protected",
+    )
+    try:
+        _psql(
+            "INSERT INTO job_items "
+            "(job_id, item_index, item_kind, face_index, score, confidence) "
+            "SELECT job_id, item_index, item_kind, face_index, score, confidence "
+            f"FROM job_items WHERE job_id = '{job_id}' LIMIT 1;"
+        )
+        check("database rejects a duplicate item row", False, "insert was accepted")
+    except RuntimeError as exc:
+        check(
+            "database rejects a duplicate item row",
+            "job_items_natural_key" in str(exc),
+            str(exc)[:80],
+        )
+
     # 6. Tier 1
     check("media reported deleted", doc.get("media_deleted") is True, str(doc.get("media_deleted")))
     check(

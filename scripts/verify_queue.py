@@ -107,10 +107,21 @@ def main() -> int:
     # until someone restarts it -- restart-only recovery is the weakness this
     # backend exists to remove.
     a.r.delete(a._stream(TOPIC), a._dlq(TOPIC))
+
+    # Plant the message BEFORE destroying the group, and destroy only the group
+    # so the entry survives. Pushing afterwards instead would prove nothing:
+    # a brand-new message is delivered whether the group was recreated at 0 or
+    # at $, so that version of this test passes even if the recreate silently
+    # skips everything already in the stream.
     a.push(TOPIC, {"job_id": "probe-regroup"})
+    a.r.xgroup_destroy(a._stream(TOPIC), a.GROUP)
+
     healed = a.pop(TOPIC, timeout=2)
-    check("consumer recovers after its group is deleted",
-          healed is not None and healed.payload["job_id"] == "probe-regroup")
+    check(
+        "a message already in the stream survives losing its group",
+        healed is not None and healed.payload["job_id"] == "probe-regroup",
+        "recreate must start at 0, not $ -- $ would abandon it",
+    )
     if healed:
         a.ack(healed)
 

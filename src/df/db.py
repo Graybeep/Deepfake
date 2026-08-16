@@ -76,6 +76,16 @@ class Db:
     def insert_items(self, job_id: str, items: list[dict[str, Any]]) -> None:
         if not items:
             return
+        """Write per-item scores. Idempotent by natural key.
+
+        Streams reclaim can hand a slow consumer's message to a second one, so
+        the same item can legitimately be scored twice. DO NOTHING keeps the
+        first write rather than counting the item twice in aggregation --
+        re-scoring the same bytes with the same model_version_id is
+        deterministic, so the discarded row would have been identical anyway.
+        The unique index (migration 002) is what makes this safe; without it
+        the clause is a no-op that silently permits the duplicate.
+        """
         # executemany is a cursor method in psycopg3; Connection only has
         # execute(). Every other method here happens to use execute(), which is
         # why this was the one path that broke against a real database.
@@ -85,6 +95,7 @@ class Db:
                 INSERT INTO job_items
                     (job_id, item_index, item_kind, face_index, score, confidence, object_key)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (job_id, item_index, face_index) DO NOTHING
                 """,
                 [
                     (

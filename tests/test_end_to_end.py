@@ -361,3 +361,79 @@ def test_video_and_image_jobs_share_one_face_model_version_id():
     assert v.job["model_version_id"] == i.job["model_version_id"]
     # Audio is a separate model and must never share that id.
     assert a.job["model_version_id"] != v.job["model_version_id"]
+
+
+# --- duplicate delivery -----------------------------------------------------
+
+
+def test_a_redelivered_message_writes_the_item_only_once():
+    """Streams reclaim hands a message to a second consumer once it has been
+    idle, and idle is not dead -- a merely slow handler is still working when
+    its message is claimed. If both finish, the item must be stored once.
+
+    Asserted on the stored rows, not the score: measured against a fake with no
+    natural key, exact duplication moves the row count 17 -> 34 and leaves the
+    aggregate untouched, because rollup groups by item_index and rolls up with
+    max(). The score is protected by luck, the rows are not protected at all.
+    """
+    raw = b"pretend-video-bytes-with-faces"
+    h = Harness("video", raw, job_id="job-twice")
+    h.queue.pop(TOPIC_PREPROCESS)
+    cpu_preprocess.handle(
+        Message(topic=TOPIC_PREPROCESS,
+                payload={"job_id": "job-twice", "media_type": "video"}),
+        db=h.db, storage=h.storage, queue=h.queue, status=h.status,
+    )
+    inference_msg = h.queue.pop(TOPIC_INFERENCE)
+    gpu_inference.handle(
+        inference_msg, db=h.db, storage=h.storage, queue=h.queue, status=h.status
+    )
+    after_first = len(h.db.items["job-twice"])
+
+    # The same delivery again: consumer A was slow, consumer B claimed it.
+    gpu_inference.handle(
+        inference_msg, db=h.db, storage=h.storage, queue=h.queue, status=h.status
+    )
+
+    assert len(h.db.items["job-twice"]) == after_first, "item stored twice"
+
+
+def test_a_duplicate_carrying_a_different_score_cannot_raise_severity():
+    """The case where duplication does change the result.
+
+    Two consumers running different model_version_ids -- a rolling deploy --
+    produce different scores for the same frame. worst_case takes the max, so
+    without the natural key the higher score wins and severity climbs toward
+    the >80 band that opens extended retention, with nothing in the audit trail
+    showing why. The first write must stand.
+    """
+    db = FakeDb()
+    db.add_job("job-deploy", "video")
+
+    db.insert_items("job-deploy", [
+        {"item_index": 0, "item_kind": "frame", "face_index": 0,
+         "score": 10.0, "confidence": 0.9, "object_key": "k"},
+    ])
+    db.insert_items("job-deploy", [
+        {"item_index": 0, "item_kind": "frame", "face_index": 0,
+         "score": 95.0, "confidence": 0.9, "object_key": "k"},
+    ])
+
+    rows = db.get_items("job-deploy")
+    assert len(rows) == 1, "same frame stored twice with conflicting scores"
+    assert rows[0]["score"] == 10.0, "second writer overwrote the recorded score"
+
+
+def test_audio_chunks_are_deduplicated_too():
+    """face_index is NULL for audio, and NULL compares distinct from NULL in a
+    unique index by default. Without NULLS NOT DISTINCT every audio chunk would
+    slip past the constraint while video was protected."""
+    db = FakeDb()
+    db.add_job("job-audio", "audio")
+    row = {"item_index": 3, "item_kind": "chunk", "face_index": None,
+           "score": 42.0, "confidence": 0.8, "object_key": "c"}
+
+    db.insert_items("job-audio", [dict(row)])
+    db.insert_items("job-audio", [dict(row)])
+
+    assert len(db.get_items("job-audio")) == 1, "audio chunk stored twice"

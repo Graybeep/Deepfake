@@ -83,7 +83,20 @@ class FakeDb:
         return self.jobs[job_id]["attempts"]
 
     def insert_items(self, job_id: str, items: list[dict[str, Any]]) -> None:
-        self.items.setdefault(job_id, []).extend(items)
+        """Mirrors the unique index from migration 002 (ON CONFLICT DO NOTHING).
+
+        Without this the fake happily accepts duplicates the real database
+        rejects, and a test asserting that a redelivered message does not skew
+        aggregation would pass for the wrong reason.
+        """
+        existing = self.items.setdefault(job_id, [])
+        seen = {(r["item_index"], r.get("face_index")) for r in existing}
+        for row in items:
+            key = (row["item_index"], row.get("face_index"))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(row)
 
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         return sorted(
