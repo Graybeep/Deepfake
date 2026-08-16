@@ -74,8 +74,6 @@ class Db:
             return int(row["attempts"]) if row else 0
 
     def insert_items(self, job_id: str, items: list[dict[str, Any]]) -> None:
-        if not items:
-            return
         """Write per-item scores. Idempotent by natural key.
 
         Streams reclaim can hand a slow consumer's message to a second one, so
@@ -86,6 +84,8 @@ class Db:
         The unique index (migration 002) is what makes this safe; without it
         the clause is a no-op that silently permits the duplicate.
         """
+        if not items:
+            return
         # executemany is a cursor method in psycopg3; Connection only has
         # execute(). Every other method here happens to use execute(), which is
         # why this was the one path that broke against a real database.
