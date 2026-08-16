@@ -508,3 +508,46 @@ def test_every_item_row_records_which_model_scored_it():
     assert all(r.get("model_version_id") for r in rows), (
         "an item row has no recorded producer"
     )
+
+
+def test_the_job_row_records_that_attribution_was_complete():
+    """0 and NULL are different claims: measured-and-complete vs never-measured.
+
+    The job row is what a dispute reads, so "we checked and every item had a
+    recorded producer" has to be stated on it, not inferred from the absence of
+    a review flag.
+    """
+    h = Harness("video", b"pretend-video-bytes-with-faces", job_id="job-attributed")
+    h.run()
+
+    assert h.db.jobs["job-attributed"]["items_unattributed"] == 0
+
+
+def test_the_job_row_carries_the_unattributed_count_not_just_a_flag():
+    """review_flags is operational and gets read now; the job row is the
+    permanent record and outlives both the alert and the deploy that caused it.
+    A flag nobody watched does not change what the row claims."""
+    db, storage = FakeDb(), InMemoryStorage()
+    db.add_job("job-straddle", "video")
+
+    pre = [{"item_index": i, "item_kind": "frame", "face_index": 0, "score": 5.0,
+            "confidence": 0.9, "object_key": f"k{i}", "model_version_id": None}
+           for i in range(3)]
+    post = [{"item_index": i, "item_kind": "frame", "face_index": 0, "score": 5.0,
+             "confidence": 0.9, "object_key": f"k{i}", "model_version_id": "face-v1"}
+            for i in range(3, 6)]
+    db.insert_items("job-straddle", pre)
+    db.insert_items("job-straddle", post)
+
+    router_worker.handle(
+        Message(topic=TOPIC_AGGREGATE,
+                payload={"job_id": "job-straddle", "media_type": "video",
+                         "model_version_id": "face-v1"}),
+        db=db, storage=storage, status=FakeJobStatus(),
+    )
+
+    job = db.jobs["job-straddle"]
+    assert job["model_version_id"] == "face-v1"
+    assert job["items_unattributed"] == 3, (
+        "job row claims full attribution while 3 of its rows had no producer"
+    )

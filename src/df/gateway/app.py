@@ -168,6 +168,9 @@ def _public_job(job: dict) -> dict:
         "aggregation_method": job["aggregation_method"],
         "aggregation_params": job["aggregation_params"],
         "content_hash": job["content_hash"],
+        # NULL means never measured (a row written before migration 004), which
+        # is not the same claim as 0. Passed through rather than coerced.
+        "items_unattributed": job.get("items_unattributed"),
         "created_at": job["created_at"].isoformat() if job["created_at"] else None,
         "completed_at": job["completed_at"].isoformat() if job["completed_at"] else None,
         "media_deleted": job["raw_deleted_at"] is not None,
@@ -196,6 +199,17 @@ def _public_job(job: dict) -> dict:
             "PLACEHOLDER MODEL: this score was produced by a stub scorer, not a "
             "trained detector. It carries no detection meaning."
         )
+    # model_version_id is the field a reader trusts to mean "these weights
+    # produced this score". When part of the evidence had no recorded producer
+    # that is true of most of the job, not all of it, and saying so is cheaper
+    # than letting the id imply more than was observed.
+    if job.get("items_unattributed"):
+        doc["advisories"].append(
+            f"PARTIAL PROVENANCE: {job['items_unattributed']} of this job's "
+            f"scored items carry no recorded model version. The result is "
+            f"attributed to {job['model_version_id']}, which produced the rest."
+        )
+
     if job["extended_retention_until"]:
         doc["advisories"].append(
             "An extended retention window (fixed timer) is open on this result. "

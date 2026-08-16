@@ -55,7 +55,13 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   DF_MAX_UPLOAD_BYTES can be enforced at all.
 - Rate limiting on ingress.
 - Postgres job row: hash + model_version_id + aggregation method/params. This is the
-  whole audit trail — treat it as such.
+  whole audit trail — treat it as such. That cuts both ways: anything qualifying the
+  result belongs on this row, not only in a side table. `model_version_id` is derived
+  from the item rows that actually produced the score (not from the queue message),
+  and `items_unattributed` records how many of those rows had no recorded producer —
+  NULL means never measured, 0 means measured and complete. A review flag or an alert
+  is operational and gets read now; this row is what a dispute reads later, and it
+  outlives both.
 - Job status: Redis key + WebSocket push, polling fallback on reconnect. Confirm Redis
   persistence (AOF/RDB) is on — default in-memory config loses all in-flight job state
   on restart.

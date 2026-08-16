@@ -154,11 +154,17 @@ class Db:
         aggregation_params: dict,
         item_count: int,
         face_count: int | None,
+        items_unattributed: int,
     ) -> None:
         """Single write that makes a job's verdict reproducible.
 
         Score, model version, and aggregation params land together -- a row with
         a score but no model_version_id is an unauditable result.
+
+        items_unattributed lands here too, on the audit row rather than only in
+        review_flags. The flag is operational and gets attention now; this row
+        is what a dispute reads months later, and it must not assert full
+        attribution when only part of the evidence carried a producer.
         """
         with self.conn() as c, c.transaction():
             c.execute(
@@ -172,6 +178,7 @@ class Db:
                        aggregation_params = %s,
                        item_count = %s,
                        face_count = %s,
+                       items_unattributed = %s,
                        status = 'complete',
                        completed_at = now(),
                        updated_at = now()
@@ -186,6 +193,7 @@ class Db:
                     json.dumps(aggregation_params),
                     item_count,
                     face_count,
+                    items_unattributed,
                     job_id,
                 ),
             )

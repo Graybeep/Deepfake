@@ -115,6 +115,12 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         aggregation_params=agg.params,
         item_count=agg.items_used,
         face_count=face_count,
+        # On the audit row, not only in review_flags. The flag is operational
+        # and gets read now; this row is what a dispute reads later, and it
+        # must not claim full attribution when part of the evidence had no
+        # recorded producer. 0 means measured and complete, which is itself a
+        # statement worth having.
+        items_unattributed=unattributed,
     )
     db.record_event(job_id, "router.decided", {
         "band": routing.band.value,

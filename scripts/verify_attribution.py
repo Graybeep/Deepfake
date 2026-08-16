@@ -170,7 +170,32 @@ def main() -> int:
         check("reason names the counts and the attribution",
               "3/6" in f["reason"] and "face-probe-v1" in f["reason"], f["reason"])
 
-    band = db.get_job(straddle)["band"]
+    # The durable record, not the operational one. review_flags is what gets
+    # someone's attention now; this row is what a dispute reads months later,
+    # and it outlives both the alert and the deploy window that created it.
+    straddle_job = db.get_job(straddle)
+    check("the audit row itself records the unattributed count",
+          straddle_job["items_unattributed"] == 3,
+          str(straddle_job["items_unattributed"]))
+
+    # A fully attributed job must record a measured 0, not NULL -- "checked and
+    # complete" is a different claim from "never checked".
+    clean = db.create_job(
+        media_type="video", raw_object_key="", derived_prefix="", submitted_by="probe"
+    )
+    db.set_status(clean, "queued")
+    db.insert_items(clean, rows_for("face-probe-v1", 0, 4, score=5.0))
+    queue.push(TOPIC_AGGREGATE, {
+        "job_id": clean, "media_type": "video", "model_version_id": "face-probe-v1",
+    })
+    status = wait_for_status(db, clean, {"complete", "dead_letter", "failed"})
+    check("fully attributed job completes", status == "complete", f"status={status}")
+    clean_job = db.get_job(clean)
+    check("and records a measured zero, not NULL",
+          clean_job["items_unattributed"] == 0,
+          repr(clean_job["items_unattributed"]))
+
+    band = straddle_job["band"]
     check(
         "flag was raised even though the band asks for none",
         band in {"likely_authentic", "leaning_authentic"},

@@ -128,6 +128,7 @@ class FakeDb:
         aggregation_params: dict,
         item_count: int,
         face_count: int | None,
+        items_unattributed: int,
     ) -> None:
         self.jobs[job_id].update(
             result_class=result_class,
@@ -138,6 +139,7 @@ class FakeDb:
             aggregation_params=aggregation_params,
             item_count=item_count,
             face_count=face_count,
+            items_unattributed=items_unattributed,
             status="complete",
             completed_at=dt.datetime.now(dt.timezone.utc),
         )
