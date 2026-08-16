@@ -1,11 +1,9 @@
 """The hold-flag gate, across every delete trigger that can touch flagged media.
 
-FakeDb / InMemoryStorage only: no live probe exercises the hold gate. The compose
-smoke test proves deletion HAPPENS against a real bucket, and verify_attribution
-proves the refusal path against real Postgres, but nothing anywhere confirms that
-retention_hold actually BLOCKS a delete when the store is real Postgres and the
-storage is real S3. That is a Tier 1 guarantee resting entirely on fakes, and it
-is the highest-value target for scripts/verify_retention.py.
+Live probe: scripts/verify_retention.py part 1 covers this against real Postgres
+and a real bucket, and was itself mutation-verified -- disabling the gate in
+retention.py turns it red. These fast fake-backed tests are the first line; the
+probe is what proves the gate exists in the thing that ships.
 
 
 CLAUDE.md's stated testing gap: it is not enough to show the hold flag blocks the

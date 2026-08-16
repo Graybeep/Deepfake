@@ -170,6 +170,17 @@ Two gaps remain, both about what an in-process suite structurally cannot see:
 So: run `scripts/smoke_compose.py` against a live stack before treating "the tests
 pass" as "the system works."
 
+## Standing practice: docs/ regenerates in the same commit
+`docs/solution-overview.html` is the source; the PDF beside it is generated from it
+with headless Chrome. Any change to the schema, the test count, or what the system
+claims to do regenerates both **in the same commit as the change**, not afterwards.
+
+This has drifted twice already — first still claiming a 5-day sprint and 114 tests,
+then 139 against an actual 147 — and both times it was caught by someone asking rather
+than by anything in the process. A tracked document is worse than an untracked one
+when it is stale, because being in the repo is itself a claim that it is current.
+Nothing enforces this automatically, which is exactly why it is written down.
+
 ## Standing practice: prove the test fails first
 Any test written to catch a specific bug must be **shown to go red before the fix is
 in place**. Revert the fix, or disable the mechanism the test leans on, run the test,

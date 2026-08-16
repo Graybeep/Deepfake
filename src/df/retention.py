@@ -353,6 +353,17 @@ def sweep_stalled_jobs(
 
     Marking failed first is what makes the media reachable: the job then falls
     under the ordinary terminal delete path, hold flag and all.
+
+    Layering note, found by mutating the gate and watching verify_retention.py:
+    this is the ONLY sweep whose hold protection is single-layer. The others are
+    protected twice -- their finder SQL excludes held jobs AND
+    delete_media_for_job refuses them -- so disabling the gate alone leaves them
+    safe. find_stalled_in_flight deliberately does not filter on the flag,
+    because marking a job failed is not a delete and a held job that stalled
+    should still stop looking in-flight. That is defensible, but it means the
+    single `if row.retention_hold` in delete_media_for_job is the only thing
+    standing between a held stalled job and deletion. Do not add a fast path
+    around that check, and do not let this function delete directly.
     """
     now = now or _now()
     hours = older_than_hours if older_than_hours is not None else settings.stalled_job_hours

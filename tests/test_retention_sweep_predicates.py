@@ -1,16 +1,11 @@
 """Which jobs the sweeper is willing to look at.
 
-FakeDb only: no live probe covers the sweeps yet. The stalled-job sweep was
-verified once by hand -- a row planted in real Postgres, the sweeper restarted,
-the media confirmed gone -- but that was a one-off, not a repeatable check, and
-the abandoned-upload sweep has never run against a real database at all. So the
-mutation checks behind these tests prove they discriminate against FakeDb's
-behaviour, not that FakeDb still matches the real predicates. Given that
-`find_undeleted_terminal` and `find_abandoned_uploads` are raw SQL whose fake
-counterparts are hand-written Python, that gap is exactly the shape that has
-bitten three times already (executemany, get_items, insert_items duplicates).
-Closing it means a scripts/verify_retention.py alongside verify_queue.py and
-verify_attribution.py.
+Live probe: scripts/verify_retention.py part 2 runs the same predicates as raw
+SQL against real Postgres, which is what guards against the fake and the query
+drifting apart -- the divergence that has bitten three times (executemany,
+get_items, insert_items duplicates), always with the fake as the more permissive
+side. These tests stay because they are fast and cover the branching; the probe
+is what makes them evidence about production.
 
 
 The hold gate was already covered across every delete trigger
