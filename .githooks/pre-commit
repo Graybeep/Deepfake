@@ -1,0 +1,31 @@
+#!/bin/sh
+# Enable once per clone:  git config core.hooksPath .githooks
+#
+# Two checks, both mechanical, both for things a written rule already lost to:
+#   1. docs/ must not claim a test count that is not the real one.
+#   2. a schema change must carry the doc regeneration in the SAME commit.
+#
+# Neither can judge whether the prose still describes the system. They only
+# catch the counted claims and the schema case, which is what actually drifted.
+
+set -e
+
+python scripts/check_docs_current.py || {
+    echo ""
+    echo "pre-commit: docs/ is stale. Fix it or commit with --no-verify if you"
+    echo "genuinely mean to leave it that way."
+    exit 1
+}
+
+# A migration changes what the system stores; the document describes what it
+# stores. Those move together or the document is wrong the moment it lands.
+staged=$(git diff --cached --name-only)
+if echo "$staged" | grep -q '^migrations/' && ! echo "$staged" | grep -q '^docs/'; then
+    echo "pre-commit: this commit changes migrations/ but not docs/."
+    echo "Schema changes regenerate the solution document in the same commit"
+    echo "(CLAUDE.md). If this migration genuinely changes nothing the document"
+    echo "describes, commit with --no-verify."
+    exit 1
+fi
+
+exit 0

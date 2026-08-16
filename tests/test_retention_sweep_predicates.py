@@ -150,12 +150,19 @@ def test_stalled_in_flight_jobs_are_failed_and_cleared(db, storage, status):
                         created_at=LONG_AGO)
     db.jobs[f"job-{status}"]["updated_at"] = LONG_AGO
 
-    reports = sweep_stalled_jobs(db, storage, older_than_hours=6, now=NOW)
+    marked = sweep_stalled_jobs(db, older_than_hours=6, now=NOW)
 
-    assert [r.outcome for r in reports] == [DeleteOutcome.DELETED]
-    assert not media_present(storage, raw, derived)
+    assert marked == [f"job-{status}"]
     assert db.jobs[f"job-{status}"]["status"] == "failed", "row left non-terminal"
     assert "job.stalled" in db.event_names(f"job-{status}")
+    # This sweep must NOT delete. Deletion belongs to the terminal sweep, whose
+    # finder excludes held jobs -- that handoff is what makes the hold
+    # protection two-layer here instead of resting on one `if`.
+    assert media_present(storage, raw, derived), "stalled sweep deleted directly"
+
+    reports = sweep_undeleted(db, storage)
+    assert [r.outcome for r in reports] == [DeleteOutcome.DELETED]
+    assert not media_present(storage, raw, derived)
 
 
 def test_a_recently_active_job_is_not_stalled(db, storage):
@@ -164,7 +171,7 @@ def test_a_recently_active_job_is_not_stalled(db, storage):
     raw, derived = seed(db, storage, "job-busy", status="inference")
     db.jobs["job-busy"]["updated_at"] = NOW - dt.timedelta(minutes=2)
 
-    assert sweep_stalled_jobs(db, storage, older_than_hours=6, now=NOW) == []
+    assert sweep_stalled_jobs(db, older_than_hours=6, now=NOW) == []
     assert media_present(storage, raw, derived)
     assert db.jobs["job-busy"]["status"] == "inference"
 
@@ -175,9 +182,18 @@ def test_hold_blocks_the_stalled_sweep(db, storage):
     raw, derived = seed(db, storage, "job-held-stall", status="inference", hold=True)
     db.jobs["job-held-stall"]["updated_at"] = LONG_AGO
 
-    reports = sweep_stalled_jobs(db, storage, older_than_hours=6, now=NOW)
+    marked = sweep_stalled_jobs(db, older_than_hours=6, now=NOW)
 
-    assert [r.outcome for r in reports] == [DeleteOutcome.SKIPPED_HOLD]
+    # A held job still stops looking in-flight -- leaving it non-terminal would
+    # hide it from every sweep permanently.
+    assert marked == ["job-held-stall"]
+    assert db.jobs["job-held-stall"]["status"] == "failed"
+
+    # Layer one: the terminal sweep's finder never offers a held job up.
+    assert sweep_undeleted(db, storage) == []
+    # Layer two: and the gate refuses it even when handed over directly.
+    assert delete_media_for_job("job-held-stall", db, storage).outcome is (
+        DeleteOutcome.SKIPPED_HOLD)
     assert storage.exists(raw), "hold did not protect a stalled job"
     assert len(storage.list_prefix(derived)) == 3
 
@@ -270,18 +286,19 @@ def test_every_schema_status_is_claimed_by_exactly_one_sweep(db, storage, status
                         completed=(status == "complete"))
     db.jobs[job_id]["updated_at"] = LONG_AGO
 
-    claimed = {
-        "terminal": [r.job_id for r in sweep_undeleted(db, storage)],
-        "stalled": [r.job_id for r in sweep_stalled_jobs(
-            db, storage, older_than_hours=6, now=NOW)],
-        "abandoned": [r.job_id for r in sweep_abandoned_uploads(
-            db, storage, older_than_hours=24, now=NOW)],
-    }
-    owners = [name for name, ids in claimed.items() if job_id in ids]
+    # A full sweeper pass, in the order the worker runs them: stalled marks,
+    # terminal deletes what it marked plus everything already terminal,
+    # abandoned handles the pre-pipeline case.
+    marked = sweep_stalled_jobs(db, older_than_hours=6, now=NOW)
+    terminal = [r.job_id for r in sweep_undeleted(db, storage)]
+    abandoned = [r.job_id for r in sweep_abandoned_uploads(
+        db, storage, older_than_hours=24, now=NOW)]
 
-    assert owners, f"status {status!r} is claimed by no sweep -- its media is never deleted"
-    assert len(owners) == 1, f"status {status!r} claimed by more than one sweep: {owners}"
-    assert not media_present(storage, raw, derived)
+    touched = job_id in marked or job_id in terminal or job_id in abandoned
+    assert touched, f"status {status!r} is claimed by no sweep -- its media is never deleted"
+    assert not media_present(storage, raw, derived), (
+        f"status {status!r} was claimed but its media survived a full pass"
+    )
 
 
 # --- abandoned upload sweep -------------------------------------------------

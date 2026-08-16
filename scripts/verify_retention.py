@@ -133,8 +133,19 @@ def main() -> int:
     check("abandoned sweep leaves held media alone", media_present(storage, raw_ab, der_ab))
 
     job_st, raw_st, der_st = seed(db, storage, status="queued", hold=True, age_hours=48)
-    sweep_stalled_jobs(db, storage, older_than_hours=6, limit=200)
-    check("stalled sweep leaves held media alone", media_present(storage, raw_st, der_st))
+    sweep_stalled_jobs(db, older_than_hours=6, limit=200)
+    check("stalled sweep does not delete at all", media_present(storage, raw_st, der_st))
+    check("but it does mark the held job failed, so it stops hiding in-flight",
+          db.get_job(job_st)["status"] == "failed", db.get_job(job_st)["status"])
+
+    # The handoff is the point of routing deletion through the terminal sweep:
+    # that finder excludes held jobs, so a formerly-stalled held job is now
+    # protected twice -- by the query AND by the gate -- where before it had
+    # only the gate. This scenario did not exist until that change.
+    sweep_undeleted(db, storage, limit=200)
+    check("held job survives the stalled -> terminal handoff",
+          media_present(storage, raw_st, der_st),
+          "two layers: terminal finder excludes it, gate refuses it")
 
     # Trigger 3: cold-storage expiry. The flag has to outrank the timer, or a
     # hold set during a dispute evaporates on day 30 anyway.
@@ -179,13 +190,15 @@ def main() -> int:
           "deleting under a client still uploading is worse than the leak")
 
     job, raw, derived = seed(db, storage, status="queued", age_hours=48)
-    sweep_stalled_jobs(db, storage, older_than_hours=6, limit=200)
-    check("stalled in-flight job is swept", not media_present(storage, raw, derived))
+    sweep_stalled_jobs(db, older_than_hours=6, limit=200)
+    check("stalled sweep marks but does not delete", media_present(storage, raw, derived))
+    sweep_undeleted(db, storage, limit=200)
+    check("terminal sweep then clears it", not media_present(storage, raw, derived))
     check("and is marked failed with a reason",
           "stalled" in (db.get_job(job)["error"] or ""), (db.get_job(job)["error"] or "")[:60])
 
     job, raw, derived = seed(db, storage, status="inference", age_hours=0)
-    sweep_stalled_jobs(db, storage, older_than_hours=6, limit=200)
+    sweep_stalled_jobs(db, older_than_hours=6, limit=200)
     check("a job still in flight is NOT swept", media_present(storage, raw, derived),
           "deleting mid-pipeline would fail work about to succeed")
 

@@ -331,13 +331,12 @@ def sweep_abandoned_uploads(
 
 def sweep_stalled_jobs(
     store: RetentionStore,
-    storage: storage_mod.Storage,
     *,
     older_than_hours: int | None = None,
     limit: int = 100,
     now: dt.datetime | None = None,
-) -> list[DeleteReport]:
-    """Fail jobs stuck mid-pipeline, then clear their media.
+) -> list[str]:
+    """Mark jobs stuck mid-pipeline as failed. Deliberately does NOT delete.
 
     The in-flight states (queued, preprocessing, inference, aggregating) are
     transient only while their queue message exists. Both the gateway and the
@@ -351,25 +350,35 @@ def sweep_stalled_jobs(
     cost of being wrong is failing a job that was merely slow, and the client
     can resubmit, but the cost of never sweeping is media retained forever.
 
-    Marking failed first is what makes the media reachable: the job then falls
-    under the ordinary terminal delete path, hold flag and all.
+    Marking failed hands the job to sweep_undeleted, which owns deletion for
+    every terminal state. That handoff is the whole design, not an accident of
+    ordering.
 
-    Layering note, found by mutating the gate and watching verify_retention.py:
-    this is the ONLY sweep whose hold protection is single-layer. The others are
-    protected twice -- their finder SQL excludes held jobs AND
-    delete_media_for_job refuses them -- so disabling the gate alone leaves them
-    safe. find_stalled_in_flight deliberately does not filter on the flag,
-    because marking a job failed is not a delete and a held job that stalled
-    should still stop looking in-flight. That is defensible, but it means the
-    single `if row.retention_hold` in delete_media_for_job is the only thing
-    standing between a held stalled job and deletion. Do not add a fast path
-    around that check, and do not let this function delete directly.
+    Why it must not delete directly. find_stalled_in_flight deliberately does
+    NOT filter on the hold flag: marking a job failed is not a delete, and a
+    held job that stalled should still stop looking in-flight rather than
+    sitting in a non-terminal state forever, invisible to every sweep -- dead
+    rows that grow without bound, on exactly the jobs whose audit accuracy
+    matters most. But an unfiltered finder plus a direct delete would make
+    delete_media_for_job's `if row.retention_hold` the ONLY thing protecting
+    held media. Mutating that one line and watching verify_retention.py showed
+    it: every other sweep stayed green because its finder excludes held jobs
+    independently; this one went red, alone.
+
+    Routing deletion through sweep_undeleted restores the second layer, because
+    find_undeleted_terminal DOES filter on the flag. Two independent
+    protections, matching every other path.
+
+    Cost is at most one sweeper pass, and the worker runs this before the
+    terminal sweep so it is normally the same pass. For a held job the delay is
+    irrelevant -- nothing is going to delete it. For an unheld one that has
+    already sat for hours, it is noise.
     """
     now = now or _now()
     hours = older_than_hours if older_than_hours is not None else settings.stalled_job_hours
     cutoff = now - dt.timedelta(hours=hours)
 
-    reports: list[DeleteReport] = []
+    marked: list[str] = []
     for job_id in store.find_stalled_in_flight(cutoff, limit=limit):
         store.mark_job_failed(
             job_id, f"stalled in-flight with no queue message for over {hours}h"
@@ -379,8 +388,8 @@ def sweep_stalled_jobs(
             "job.stalled",
             {"detected_at": now.isoformat(), "threshold_hours": hours},
         )
-        reports.append(delete_media_for_job(job_id, store, storage, now=now))
-    return reports
+        marked.append(job_id)
+    return marked
 
 
 def sweep_expired_windows(

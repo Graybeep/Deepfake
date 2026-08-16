@@ -5,19 +5,26 @@ is the property worth preserving: two leaks were found by noticing media in the
 bucket, and both were a status the sweep query did not know to look for. Adding
 a status without giving it a path here recreates that bug.
 
-1. Backstop for the completion-triggered delete. Without it, a router worker
-   that dies between committing a verdict and deleting the bytes leaves raw
-   video and face crops in the bucket indefinitely -- and "deleted on inference
-   completion" quietly stops being true. Covers every terminal state, including
-   dead-lettered and failed jobs: those never fire the completion delete at all,
-   so this is their only path to deletion.
+Passes run in this order deliberately; 1 hands work to 2.
 
-2. Stalled in-flight jobs -- queued/preprocessing/inference/aggregating rows
+1. Stalled in-flight jobs -- queued/preprocessing/inference/aggregating rows
    whose queue message no longer exists. Both the gateway and the workers commit
    the status change before pushing to Redis, so a crash in between strands the
    row with nothing to advance it. It never completes and never dead-letters, so
-   pass 1 cannot see it. Marked failed first, which brings its media under the
-   ordinary terminal delete path.
+   pass 2 cannot see it while it is in-flight. This pass ONLY marks such jobs
+   failed -- it does not delete. Its finder does not filter on the hold flag (a
+   held job that stalled should still stop looking in-flight rather than sitting
+   invisible to every sweep forever), so deleting here would leave
+   delete_media_for_job's gate as the single protection for held media.
+   Marking, then letting pass 2 delete, gives two independent layers.
+
+2. Backstop for the completion-triggered delete, and the owner of deletion for
+   every terminal state. Without it, a router worker that dies between
+   committing a verdict and deleting the bytes leaves raw video and face crops
+   in the bucket indefinitely -- and "deleted on inference completion" quietly
+   stops being true. Covers dead-lettered and failed jobs, including the ones
+   pass 1 just marked: those never fire the completion delete at all, so this is
+   their only path to deletion. Its finder excludes held jobs.
 
 3. Abandoned uploads -- a client granted an upload URL that never notified.
    Those jobs never enter the pipeline, so no terminal state is ever reached and
@@ -56,6 +63,22 @@ def main() -> None:
     log.info("retention sweeper up, interval=%ds", INTERVAL_SECONDS)
 
     while True:
+        # Stalled FIRST. It only marks jobs failed; sweep_undeleted below owns
+        # the deletion, and its finder excludes held jobs, which is the second
+        # layer the stalled path would otherwise lack. Running it first means
+        # the handoff completes in this pass rather than the next one.
+        try:
+            stalled = sweep_stalled_jobs(db, limit=200)
+            if stalled:
+                log.warning(
+                    "sweeper marked %d stalled job(s) failed -- stuck in an in-flight "
+                    "state with no queue message; media is cleared by the terminal "
+                    "sweep below, which excludes held jobs",
+                    len(stalled),
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("stalled job sweep failed, retrying next interval")
+
         try:
             reports = sweep_undeleted(db, storage, limit=200)
             deleted = [r for r in reports if r.outcome is DeleteOutcome.DELETED]
@@ -68,17 +91,6 @@ def main() -> None:
                 )
         except Exception:  # noqa: BLE001 - sweeper must survive a bad round
             log.exception("undeleted sweep failed, retrying next interval")
-
-        try:
-            stalled = sweep_stalled_jobs(db, storage, limit=200)
-            if stalled:
-                log.warning(
-                    "sweeper failed and cleared %d stalled job(s) -- stuck in an "
-                    "in-flight state with no queue message to advance them",
-                    len(stalled),
-                )
-        except Exception:  # noqa: BLE001
-            log.exception("stalled job sweep failed, retrying next interval")
 
         try:
             abandoned = sweep_abandoned_uploads(db, storage, limit=200)

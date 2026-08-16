@@ -179,7 +179,18 @@ This has drifted twice already — first still claiming a 5-day sprint and 114 t
 then 139 against an actual 147 — and both times it was caught by someone asking rather
 than by anything in the process. A tracked document is worse than an untracked one
 when it is stale, because being in the repo is itself a claim that it is current.
-Nothing enforces this automatically, which is exactly why it is written down.
+A written rule already lost to a human forgetting twice, so it is now mechanical.
+`.githooks/pre-commit` runs `scripts/check_docs_current.py`, which fails the commit
+when the document claims a test count pytest does not collect, and separately fails a
+commit that touches `migrations/` without touching `docs/`. Enable it once per clone:
+
+    git config core.hooksPath .githooks
+
+The hook checks only what can be checked without judgement — the counted claims and
+the schema case, which are exactly what drifted both times. Whether the prose still
+describes the system is still a person's job. `--no-verify` exists for the case where
+a migration genuinely changes nothing the document describes; reaching for it
+routinely means the rule is wrong and should be changed rather than bypassed.
 
 ## Standing practice: prove the test fails first
 Any test written to catch a specific bug must be **shown to go red before the fix is
