@@ -457,11 +457,11 @@
       <tr><td>Models</td><td>PyTorch, EfficientNet</td><td>Strong accuracy-per-FLOP; separate face and audio models, each with its own calibration.</td></tr>
       <tr><td>Calibration</td><td>Temperature scaling</td><td>Cheap, monotonic, needs only a held-out set. Launch snapshot only.</td></tr>
       <tr><td>Database</td><td>PostgreSQL 16 (psycopg3)</td><td>Transactional audit trail; JSONB for aggregation params; partial indexes drive the sweepers.</td></tr>
-      <tr><td>Queue &amp; status</td><td>Redis 7 (AOF + RDB)</td><td>One dependency for both work queue and live status. Persistence is mandatory, not default.</td></tr>
+      <tr><td>Queue &amp; status</td><td>Redis 7 (AOF + RDB), Streams consumer groups</td><td>One dependency for both work queue and live status. Persistence is mandatory, not default. Consumer groups let any live worker reclaim a message whose consumer died, so recovery does not wait for a restart.</td></tr>
       <tr><td>Object storage</td><td>MinIO locally, S3 deployed (boto3)</td><td>Identical presigned-upload semantics in both; MinIO disappears from compose in a deployed environment.</td></tr>
       <tr><td>Packaging</td><td>Docker, Docker Compose</td><td>One image per service; network isolation expressed declaratively.</td></tr>
       <tr><td>GPU</td><td>NVIDIA CUDA via WSL2 passthrough</td><td>Verified on an RTX 4060 (8 GB) before any weights were wired in.</td></tr>
-      <tr><td>Testing</td><td>pytest, compose smoke test</td><td>139 unit/integration tests plus a live-stack script that asserts against real Postgres and object storage.</td></tr>
+      <tr><td>Testing</td><td>pytest, compose smoke test</td><td>147 unit/integration tests plus live-stack probes that assert against real Postgres, Redis and object storage.</td></tr>
       <tr><td>Supply chain</td><td>gitleaks</td><td>Full-history secrets scan gates every push to the public remote.</td></tr>
     </tbody>
   </table>
@@ -520,11 +520,14 @@
   <table class="status">
     <tbody>
       <tr><td>✔</td><td>Compose stack runs end-to-end; smoke test passes every check</td></tr>
-      <tr><td>✔</td><td>139 automated tests passing</td></tr>
+      <tr><td>✔</td><td>147 automated tests passing, plus 30 live-stack checks</td></tr>
       <tr><td>✔</td><td>Deletion verified against the storage backend — objects confirmed absent, not merely flagged</td></tr>
       <tr><td>✔</td><td>Hold gate tested across all three delete triggers, held and unheld</td></tr>
       <tr><td>✔</td><td>Every status the schema permits has a sweep path, checked against the SQL that runs rather than a restatement of it</td></tr>
       <tr><td>✔</td><td>Failed jobs report why, on both the WebSocket and the polling view</td></tr>
+      <tr><td>✔</td><td>One item, one score row — enforced by a natural key in the database, not by handler discipline</td></tr>
+      <tr><td>✔</td><td>Each result attributed to the model that produced the rows it was computed from; a job scored by two models is refused rather than guessed</td></tr>
+      <tr><td>✔</td><td>Partial provenance recorded on the job row itself, not only in an alert</td></tr>
       <tr><td>✔</td><td>Audit trail asserted by reading Postgres columns back, not trusting the API response</td></tr>
       <tr><td>✔</td><td>Upload size cap proven enforced by object storage (oversized upload rejected)</td></tr>
       <tr><td>✔</td><td>GPU passthrough verified end-to-end before wiring the model backend</td></tr>

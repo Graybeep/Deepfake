@@ -191,7 +191,14 @@ Three instances is a pattern, not bad luck, and the tell is the same every time:
 test never observed the thing its name claims. The check is cheap and mechanical — do
 it while writing the test.
 
-**Mutate production source, and verify against the live probe wherever one exists.**
+**Mutate production source, and verify against a live probe. Where no live probe
+exists for that path, the test must say so inline** — a trailing comment or a name,
+e.g. `# FakeDb only: no live probe for the retention sweeps yet`. Not optional, and
+not a nicety: "wherever one exists" on its own is a loophole that quietly makes
+fake-only checking the default for every path that has no probe, and leaves the
+weakness discoverable only by someone who later thinks to ask. Declaring it puts the
+gap in front of whoever writes the next test in that file, which is the only moment it
+is cheap to close. A test with no marker is a claim that a live probe covers it.
 Mutating the fake and re-running pytest proves only that the test distinguishes the
 fake's broken mode from the fake's fixed mode. That is a weaker claim than it sounds
 in this codebase specifically, because the fake and the real query have diverged three
