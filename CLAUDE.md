@@ -189,6 +189,20 @@ named, each caught only by later inspection:
 
 Three instances is a pattern, not bad luck, and the tell is the same every time: the
 test never observed the thing its name claims. The check is cheap and mechanical — do
-it while writing the test. Mutating the fake is usually enough and touches no
-production source; see the scratch harness pattern used for the model-attribution
-tests.
+it while writing the test.
+
+**Mutate production source, and verify against the live probe wherever one exists.**
+Mutating the fake and re-running pytest proves only that the test distinguishes the
+fake's broken mode from the fake's fixed mode. That is a weaker claim than it sounds
+in this codebase specifically, because the fake and the real query have diverged three
+times — `FakeDb.executemany`, `get_items` not selecting `model_version_id`, and
+`FakeDb.insert_items` accepting duplicates the unique index rejects — and every time
+the fake was the more permissive of the two, so the fake-only check would have stayed
+green. Revert the real code, rebuild the container, run `scripts/verify_attribution.py`
+or `scripts/verify_queue.py` or `scripts/smoke_compose.py`, confirm red, restore, and
+confirm green again.
+
+Two mutations, not one, when a value is involved: dropping the write and writing a
+wrong constant fail differently, and a check that only proves the column exists cannot
+see the second. Mutating real source also forces you to read the file rather than your
+memory of it — that is how the stray `insert_items` docstring was found.
