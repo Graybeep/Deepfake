@@ -138,6 +138,53 @@ stated offline or push requirement, and two extra build targets plus store revie
 permanent ongoing cost, not a one-off spend that more time absorbs. Revisit only if
 one becomes a real requirement.
 
+## Model trust level, and how the caveat is produced
+Every result carries a caveat stating how far its score can be trusted, and the
+mechanism **fails closed**. `ModelVersion.validation` is one of `placeholder`,
+`research-checkpoint`, `production-validated`; it is a required field, so a new
+detector cannot ship without declaring one. It is written onto each item row and
+derived by the router from the rows that produced the score — same rule as
+`model_version_id`: the rows are the evidence, the queue message is hearsay.
+`jobs.model_validation` carries it on the audit row.
+
+`_public_job` derives the advisory from that column. **NULL or any unrecognised
+value produces the strongest caveat, not none.** The previous version matched the
+substring `stub` against `model_version_id`, which failed OPEN: loading a real
+checkpoint changes the id to `face-efficientnet_b4-<hash>`, the substring vanishes,
+and every caveat disappears silently — at exactly the moment scores start looking
+plausible enough to be believed. Do not reintroduce a check keyed on how a model is
+named.
+
+`production-validated` takes two keys: `DF_MODEL_VALIDATION` plus a non-empty
+`DF_MODEL_VALIDATION_SIGNOFF` naming who validated the weights against this
+pipeline. The "Cannot claim" list below still forbids the claim; the two-key gate
+makes reaching it a deliberate, attributable act rather than a one-character change.
+
+## Weights: decided, not yet integrated
+Chosen placeholder: the **DFDC-winner EfficientNet** (`selimsef/dfdc_deepfake_challenge`).
+
+**Licence caveat, accepted knowingly.** The repository code is MIT (verified). The
+*weights* are trained on Meta's DFDC dataset, whose terms are not published on the
+dataset page and whose download is gated behind an account and an agreement. Whether
+a dataset licensor's terms flow through to derived model weights is unsettled and
+jurisdiction-dependent. **Do not ship these weights commercially without legal
+review.** This is a stated, nameable risk; that is why it is written here.
+
+Rejected, with reasons, so they are not re-proposed:
+- **FaceForensics++** — non-commercial research/education only, binds a for-profit
+  employer, and requires manual approval. Hard blocker.
+- **DeepfakeBench** — CC BY-NC-4.0 (non-commercial) *and* per-detector training data
+  undocumented. Worse on both axes.
+- **Apache-2.0 HuggingFace checkpoints** (ViT/SigLIP) — clean licence but
+  undocumented training data. That is not honesty, it is unverifiability: it cannot
+  rule out FF++/DFDC-derived data, train/eval leakage, or simple unsuitability. A
+  known, nameable licence risk beats an unknown provenance one; "clearly marked"
+  would have labelled the licence and left the real gap unlabelled.
+
+Audio has no checkpoint under this decision and stays on the stub. Expect a mixed
+state: video/image at `research-checkpoint`, audio at `placeholder`. The advisory is
+per-job and derived per-model, so it reports this correctly without special-casing.
+
 ## Cannot claim in code, comments, or user-facing copy
 - "Adversarial robustness" — not built.
 - "Legal hold" — it's a fixed-timer extended retention window.

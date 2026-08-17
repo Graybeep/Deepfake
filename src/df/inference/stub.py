@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import hashlib
 
-from df.inference.base import Detector, ModelVersion, Prediction
+from df.inference.base import (
+    VALIDATION_PLACEHOLDER,
+    Detector,
+    ModelVersion,
+    Prediction,
+)
 
 _FACE_VERSION = ModelVersion(
     model_version_id="face-stub-v0",
@@ -21,6 +26,7 @@ _FACE_VERSION = ModelVersion(
     weights_sha256=None,
     calibration="none",
     is_real_detector=False,
+    validation=VALIDATION_PLACEHOLDER,
 )
 
 _AUDIO_VERSION = ModelVersion(
@@ -30,6 +36,7 @@ _AUDIO_VERSION = ModelVersion(
     weights_sha256=None,
     calibration="none",
     is_real_detector=False,
+    validation=VALIDATION_PLACEHOLDER,
 )
 
 

@@ -21,6 +21,11 @@ from pydantic import BaseModel, Field
 from df import storage as storage_mod
 from df.config import settings
 from df.db import Db
+from df.inference.base import (
+    VALIDATION_PLACEHOLDER,
+    VALIDATION_PRODUCTION,
+    VALIDATION_RESEARCH,
+)
 from df.jobstatus import JobStatus, assert_persistence_enabled
 from df.queue import TOPIC_PREPROCESS, Queue, build_queue
 from df.ratelimit import RateLimiter
@@ -154,6 +159,49 @@ def mark_uploaded(job_id: str, request: Request) -> dict:
     return {"job_id": job_id, "status": "queued", "enqueued": True}
 
 
+def _validation_advisories(job: dict) -> list[str]:
+    """Caveats about how far this score can be trusted. FAILS CLOSED.
+
+    The previous version matched the substring "stub" against model_version_id.
+    That failed OPEN: loading any real checkpoint changed the id to something
+    like face-efficientnet_b4-<hash>, the substring vanished, and with it every
+    caveat -- silently, at the exact moment scores start looking plausible
+    enough to be believed. Whether a reader is warned must not depend on how a
+    model happens to be named.
+
+    So this reads the level recorded on the job row at decision time, and any
+    value it does not recognise -- including NULL, including a level added later
+    by someone who did not update this function -- produces the strongest
+    caveat rather than none. Unknown provenance is a reason to warn.
+    """
+    level = job.get("model_validation")
+
+    if level == VALIDATION_PRODUCTION:
+        return []
+
+    if level == VALIDATION_PLACEHOLDER:
+        return [
+            "PLACEHOLDER MODEL: this score was produced by a stub scorer, not a "
+            "trained detector. It carries no detection meaning."
+        ]
+
+    if level == VALIDATION_RESEARCH:
+        return [
+            "RESEARCH CHECKPOINT: this score came from a public pre-trained model "
+            "evaluated on a public slice, not from weights validated for this "
+            "system. It has not been measured against this pipeline's score "
+            "bands, and its training data may not resemble your input. Treat it "
+            "as indicative, not as a finding."
+        ]
+
+    # NULL, or anything unrecognised.
+    return [
+        "UNVERIFIED MODEL: no validation level was recorded for the weights that "
+        "produced this score, so nothing here establishes what they were or how "
+        "far they can be trusted. Treat this result as unverified."
+    ]
+
+
 def _public_job(job: dict) -> dict:
     doc = {
         "job_id": str(job["id"]),
@@ -171,6 +219,8 @@ def _public_job(job: dict) -> dict:
         # NULL means never measured (a row written before migration 004), which
         # is not the same claim as 0. Passed through rather than coerced.
         "items_unattributed": job.get("items_unattributed"),
+        # NULL means never recorded, which callers must read as untrusted.
+        "model_validation": job.get("model_validation"),
         "created_at": job["created_at"].isoformat() if job["created_at"] else None,
         "completed_at": job["completed_at"].isoformat() if job["completed_at"] else None,
         "media_deleted": job["raw_deleted_at"] is not None,
@@ -194,11 +244,7 @@ def _public_job(job: dict) -> dict:
         "Scores can be manipulated by adversarial perturbation of the input. "
         "No adversarial-input pre-classifier is in place.",
     ]
-    if (job["model_version_id"] or "").endswith("stub-v0") or "stub" in (job["model_version_id"] or ""):
-        doc["advisories"].append(
-            "PLACEHOLDER MODEL: this score was produced by a stub scorer, not a "
-            "trained detector. It carries no detection meaning."
-        )
+    doc["advisories"].extend(_validation_advisories(job))
     # model_version_id is the field a reader trusts to mean "these weights
     # produced this score". When part of the evidence had no recorded producer
     # that is true of most of the job, not all of it, and saying so is cheaper

@@ -254,9 +254,10 @@ class _FixedScore:
 
     @property
     def version(self):
-        from df.inference.base import ModelVersion
+        from df.inference.base import VALIDATION_PLACEHOLDER, ModelVersion
 
-        return ModelVersion("face-fixed-v0", "test", "face", None, "none", False)
+        return ModelVersion("face-fixed-v0", "test", "face", None, "none", False,
+                            VALIDATION_PLACEHOLDER)
 
     def predict_batch(self, inputs: list):
         from df.inference.base import Prediction

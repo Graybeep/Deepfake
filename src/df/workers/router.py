@@ -78,6 +78,20 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
     # would be worse than the ambiguity), but it means partial provenance is
     # being treated as full provenance, so say so in the audit trail instead of
     # letting the row imply more certainty than was observed.
+    # Trust level, derived from the same rows as the model id. Refusing a job
+    # scored by two models already guarantees one model, so more than one
+    # validation level here means the rows disagree about weights we think are
+    # identical -- unreproducible, and not something to average over.
+    validations = db.item_model_validations(job_id)
+    if len(validations) > 1:
+        raise ValueError(
+            f"job {job_id} has items recorded with multiple validation levels "
+            f"{validations}; refusing to state one trust level for the result"
+        )
+    # None when nothing recorded a level. Downstream must read that as
+    # untrusted, never as "fine" -- see _public_job.
+    model_validation = validations[0] if validations else None
+
     unattributed = sum(1 for r in rows if r.get("model_version_id") is None)
     if unattributed and observed:
         db.record_event(job_id, "router.partial_provenance", {
@@ -121,6 +135,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         # recorded producer. 0 means measured and complete, which is itself a
         # statement worth having.
         items_unattributed=unattributed,
+        model_validation=model_validation,
     )
     db.record_event(job_id, "router.decided", {
         "band": routing.band.value,

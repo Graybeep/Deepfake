@@ -98,6 +98,13 @@ class FakeDb:
             seen.add(key)
             existing.append(row)
 
+    def item_model_validations(self, job_id: str) -> list[str]:
+        """Mirrors the real DISTINCT query, NULLs dropped."""
+        return sorted({
+            r["model_validation"] for r in self.items.get(job_id, [])
+            if r.get("model_validation") is not None
+        })
+
     def item_model_versions(self, job_id: str) -> list[str]:
         """Mirrors the real DISTINCT query, including dropping NULLs.
 
@@ -129,6 +136,7 @@ class FakeDb:
         item_count: int,
         face_count: int | None,
         items_unattributed: int,
+        model_validation: str | None,
     ) -> None:
         self.jobs[job_id].update(
             result_class=result_class,
@@ -140,6 +148,7 @@ class FakeDb:
             item_count=item_count,
             face_count=face_count,
             items_unattributed=items_unattributed,
+            model_validation=model_validation,
             status="complete",
             completed_at=dt.datetime.now(dt.timezone.utc),
         )

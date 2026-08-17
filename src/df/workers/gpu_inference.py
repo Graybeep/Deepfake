@@ -57,6 +57,9 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                 # can disagree, and the surviving rows are the ones that were
                 # actually used to compute the score.
                 "model_version_id": detector.version.model_version_id,
+                # Trust level of the weights that produced THIS number,
+                # carried with it so the caveat cannot drift from the score.
+                "model_validation": detector.version.validation,
             })
 
     db.insert_items(job_id, rows)

@@ -94,8 +94,8 @@ class Db:
                 """
                 INSERT INTO job_items
                     (job_id, item_index, item_kind, face_index, score, confidence,
-                     object_key, model_version_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     object_key, model_version_id, model_validation)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (job_id, item_index, face_index) DO NOTHING
                 """,
                 [
@@ -108,6 +108,7 @@ class Db:
                         i["confidence"],
                         i.get("object_key"),
                         i.get("model_version_id"),
+                        i.get("model_validation"),
                     )
                     for i in items
                 ],
@@ -131,12 +132,27 @@ class Db:
             ).fetchall()
         return [r["model_version_id"] for r in rows]
 
+    def item_model_validations(self, job_id: str) -> list[str]:
+        """Validation levels recorded on this job's surviving rows.
+
+        Derived from the rows for the same reason model_version_id is: the
+        queue message is hearsay, the rows are what produced the score.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT model_validation FROM job_items "
+                "WHERE job_id = %s AND model_validation IS NOT NULL "
+                "ORDER BY model_validation",
+                (job_id,),
+            ).fetchall()
+        return [r["model_validation"] for r in rows]
+
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         with self.conn() as c:
             return c.execute(
                 """
                 SELECT item_index, item_kind, face_index, score, confidence,
-                       object_key, model_version_id
+                       object_key, model_version_id, model_validation
                   FROM job_items WHERE job_id = %s ORDER BY item_index, face_index
                 """,
                 (job_id,),
@@ -155,6 +171,7 @@ class Db:
         item_count: int,
         face_count: int | None,
         items_unattributed: int,
+        model_validation: str | None,
     ) -> None:
         """Single write that makes a job's verdict reproducible.
 
@@ -179,6 +196,7 @@ class Db:
                        item_count = %s,
                        face_count = %s,
                        items_unattributed = %s,
+                       model_validation = %s,
                        status = 'complete',
                        completed_at = now(),
                        updated_at = now()
@@ -194,6 +212,7 @@ class Db:
                     item_count,
                     face_count,
                     items_unattributed,
+                    model_validation,
                     job_id,
                 ),
             )

@@ -461,7 +461,7 @@
       <tr><td>Object storage</td><td>MinIO locally, S3 deployed (boto3)</td><td>Identical presigned-upload semantics in both; MinIO disappears from compose in a deployed environment.</td></tr>
       <tr><td>Packaging</td><td>Docker, Docker Compose</td><td>One image per service; network isolation expressed declaratively.</td></tr>
       <tr><td>GPU</td><td>NVIDIA CUDA via WSL2 passthrough</td><td>Verified on an RTX 4060 (8 GB) before any weights were wired in.</td></tr>
-      <tr><td>Testing</td><td>pytest, compose smoke test</td><td>147 unit/integration tests plus live-stack probes that assert against real Postgres, Redis and object storage.</td></tr>
+      <tr><td>Testing</td><td>pytest, compose smoke test</td><td>154 unit/integration tests plus live-stack probes that assert against real Postgres, Redis and object storage.</td></tr>
       <tr><td>Supply chain</td><td>gitleaks</td><td>Full-history secrets scan gates every push to the public remote.</td></tr>
     </tbody>
   </table>
@@ -520,7 +520,7 @@
   <table class="status">
     <tbody>
       <tr><td>✔</td><td>Compose stack runs end-to-end; smoke test passes every check</td></tr>
-      <tr><td>✔</td><td>147 automated tests passing, plus 30 live-stack checks</td></tr>
+      <tr><td>✔</td><td>154 automated tests passing, plus 60+ live-stack checks</td></tr>
       <tr><td>✔</td><td>Deletion verified against the storage backend — objects confirmed absent, not merely flagged</td></tr>
       <tr><td>✔</td><td>Hold gate tested across all three delete triggers, held and unheld</td></tr>
       <tr><td>✔</td><td>Every status the schema permits has a sweep path, checked against the SQL that runs rather than a restatement of it</td></tr>
@@ -528,6 +528,7 @@
       <tr><td>✔</td><td>One item, one score row — enforced by a natural key in the database, not by handler discipline</td></tr>
       <tr><td>✔</td><td>Each result attributed to the model that produced the rows it was computed from; a job scored by two models is refused rather than guessed</td></tr>
       <tr><td>✔</td><td>Partial provenance recorded on the job row itself, not only in an alert</td></tr>
+      <tr><td>✔</td><td>Every result states how far its model can be trusted, and the check fails closed — an unknown or unrecorded level produces the strongest caveat, not none</td></tr>
       <tr><td>✔</td><td>Audit trail asserted by reading Postgres columns back, not trusting the API response</td></tr>
       <tr><td>✔</td><td>Upload size cap proven enforced by object storage (oversized upload rejected)</td></tr>
       <tr><td>✔</td><td>GPU passthrough verified end-to-end before wiring the model backend</td></tr>

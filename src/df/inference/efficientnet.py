@@ -13,9 +13,47 @@ never need the ML stack.
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 
-from df.inference.base import Detector, ModelVersion, Prediction
+from df.inference.base import (
+    VALIDATION_LEVELS,
+    VALIDATION_PRODUCTION,
+    VALIDATION_RESEARCH,
+    Detector,
+    ModelVersion,
+    Prediction,
+)
+
+
+def _validation_level() -> str:
+    """How far these weights may be trusted. Defaults to research-checkpoint.
+
+    Loading real weights is not validation. A public checkpoint is trained on
+    someone else's distribution, thresholded for someone else's task, and has
+    never been measured against this pipeline's bands -- so the honest default
+    for any torch backend is `research-checkpoint`, and it must stay that way
+    without a deliberate act.
+
+    Claiming production-validated therefore takes two keys: the level AND a
+    non-empty DF_MODEL_VALIDATION_SIGNOFF naming who signed it off, which is
+    recorded. CLAUDE.md forbids the claim outright today; this makes reaching
+    it an explicit, attributable act rather than a one-character env change.
+    """
+    level = os.environ.get("DF_MODEL_VALIDATION", VALIDATION_RESEARCH).strip()
+    if level not in VALIDATION_LEVELS:
+        raise ValueError(
+            f"DF_MODEL_VALIDATION={level!r} is not one of {sorted(VALIDATION_LEVELS)}"
+        )
+    if level == VALIDATION_PRODUCTION and not os.environ.get(
+        "DF_MODEL_VALIDATION_SIGNOFF", ""
+    ).strip():
+        raise ValueError(
+            "DF_MODEL_VALIDATION=production-validated requires "
+            "DF_MODEL_VALIDATION_SIGNOFF naming who validated these weights "
+            "against this pipeline. CLAUDE.md does not permit the claim yet."
+        )
+    return level
 from df.inference.calibration import (
     AUDIO_TEMPERATURE,
     CALIBRATION_SCHEME,
@@ -74,6 +112,10 @@ class EfficientNetDetector(Detector):
             weights_sha256=_sha256_file(path),
             calibration=CALIBRATION_SCHEME,
             is_real_detector=True,
+            # Never defaults to production-validated. A checkpoint being
+            # loadable says nothing about whether it was validated for this
+            # data, this threshold set, or this decision.
+            validation=_validation_level(),
         )
 
     @property

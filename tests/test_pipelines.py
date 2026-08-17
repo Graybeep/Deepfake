@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from df.bands import ResultClass
-from df.inference.base import ModelVersion, Prediction
+from df.inference.base import VALIDATION_PLACEHOLDER, ModelVersion, Prediction
 from df.inference.stub import audio_stub, face_stub
 from df.pipelines import audio as audio_pipeline
 from df.pipelines import image as image_pipeline
@@ -22,7 +22,8 @@ class FixedDetector:
 
     @property
     def version(self) -> ModelVersion:
-        return ModelVersion("test-fixed-v0", "test", "face", None, "none", False)
+        return ModelVersion("test-fixed-v0", "test", "face", None, "none", False,
+                            VALIDATION_PLACEHOLDER)
 
     def predict_batch(self, inputs: list) -> list[Prediction]:
         out = []

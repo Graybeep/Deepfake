@@ -289,6 +289,23 @@ def main() -> int:
         any("adversarial" in a.lower() for a in doc.get("advisories", [])),
     )
 
+    # Every result states how far its score can be trusted, and the check fails
+    # closed: only production-validated may be silent, and that level cannot be
+    # reached without an explicit signed-off env var. A result with no trust
+    # caveat here means the advisory stopped firing -- which is what happened
+    # under the old substring match the moment a real checkpoint loaded.
+    trust_words = ("PLACEHOLDER MODEL", "RESEARCH CHECKPOINT", "UNVERIFIED MODEL")
+    check(
+        "result states how far the model can be trusted",
+        any(w in a for a in doc.get("advisories", []) for w in trust_words),
+        f"validation={doc.get('model_validation')!r} advisories={doc.get('advisories')}",
+    )
+    check(
+        "and the level is recorded on the job row, not inferred from the id",
+        doc.get("model_validation") is not None,
+        str(doc.get("model_validation")),
+    )
+
     # 7. media really is gone from the bucket, not just flagged in Postgres
     check(
         "raw upload absent from bucket",
