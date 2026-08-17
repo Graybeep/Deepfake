@@ -76,6 +76,11 @@ services:
       - "9000:9000"
       - "9001:9001"
     healthcheck:
+      # `mc ready` reports cluster READINESS; /minio/health/live reports liveness.
+      # minio-init depends on this healthcheck, so a live-but-not-ready server
+      # would let bucket creation race. Not because curl is missing -- it is
+      # present in the image and the liveness endpoint works (checked 2026-08-18);
+      # CLAUDE.md previously claimed otherwise and was wrong.
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 3s

@@ -119,12 +119,68 @@ GPU-inference pod specifically — that's the cost driver — managed or PVC-bac
 Postgres/Redis.
 GPU passthrough is a separate prerequisite from installing Docker Desktop — the
 WSL2-enabled NVIDIA driver installs on the Windows host, never inside the WSL distro.
-`nvidia-container-toolkit` is the Linux-side piece — installs via `apt` inside the
-WSL distro (Ubuntu), not on Windows; it needs a distro to live in, it doesn't replace
-one. Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
+NVIDIA is explicit: "This is the only driver you need to install. Do not install any
+Linux display driver in WSL" — installing one can overwrite the host driver mapping,
+since the Windows driver is stubbed into WSL2 as `libcuda.so`.
+[NVIDIA CUDA on WSL guide, read 2026-08-18:
+<https://docs.nvidia.com/cuda/wsl-user-guide/index.html>]
+
+`nvidia-container-toolkit` is the Linux-side piece and installs inside a WSL distro,
+not on Windows — same source. But note what was measured here on 2026-08-16: it is
+**not installed in this machine's Ubuntu**, and `docker run --gpus all` works anyway,
+because Docker Desktop supplies GPU support from its own bundled distro rather than
+from yours. Both statements are true of different distros. Install it only if you run
+a native Docker engine inside Ubuntu; do not read a passing GPU check as evidence that
+it is present.
+
+Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
 before wiring the torch backend into compose — not on the day the weights land.
-MinIO's official image dropped curl — a healthcheck written as `curl -f .../health/live`
-fails immediately regardless of whether MinIO is actually up. Use `mc ready local`.
+[Both verified 2026-08-16 on this box: driver 610.43.02, RTX 4060 Laptop, 8 GB.]
+**CORRECTED 2026-08-18.** This file previously said MinIO's official image had dropped
+curl, and that a `curl -f .../health/live` healthcheck therefore fails regardless of
+whether MinIO is up. **Both halves are false**, checked by running the image:
+`minio/minio:latest` ships curl at `/usr/bin/curl`, and `curl -sf
+http://localhost:9000/minio/health/live` returns exit 0 against a healthy server.
+(`docker run --rm --entrypoint sh minio/minio:latest -c "command -v curl"`, then the
+same check inside a running server.) `wget` is genuinely absent, which may be where
+the belief started.
+
+Keep `mc ready local` anyway, for the reason that actually holds: it reports *cluster
+readiness*, whereas `/health/live` reports liveness, and compose gates `minio-init` on
+this healthcheck — a live-but-not-ready server would let bucket creation race.
+
+## Provenance of the external-world claims in this file
+Claims about this repo can be checked by reading it. Claims about the outside world —
+what a vendor image contains, what a database or a protocol does — cannot, and those
+are the ones that decay silently or were never right. Backfilled 2026-08-18; the rule
+is not forward-only, and an uncited claim already in the file is the same problem as a
+new one.
+
+Verified by running it on this machine, which is stronger than a citation:
+
+- **Presigned PUT cannot carry a size cap; a POST policy can.** `scripts/smoke_compose.py`
+  mints a grant with a 1 KiB bound and shows storage accepting a body under it and
+  rejecting one over it with 400, leaving nothing written.
+- **`content-length-range` with `NULLS NOT DISTINCT` needs PG15+**, and without it audio
+  rows (NULL `face_index`) bypass the unique index. Both duplicate shapes confirmed
+  rejected by name against live Postgres 16; see `migrations/002`.
+- **Redis Streams: a taken-but-unacked message is claimable by another consumer once
+  idle, and XGROUP CREATE at `0` replays entries already in the stream while `$` would
+  abandon them.** `scripts/verify_queue.py`, including the plant-then-destroy case that
+  distinguishes the two.
+- **psycopg3 `executemany` is a cursor method; `Connection` has only `execute()`.**
+  Found the hard way — it dead-lettered every job against a real database while the
+  whole suite stayed green.
+- **Redis with default config keeps everything in memory**, so a restart drops job
+  status. `jobstatus.assert_persistence_enabled()` refuses to start without AOF/RDB and
+  is exercised on every worker boot; `appendonly yes` confirmed on the running server.
+
+Not independently verified, and flagged rather than dressed up:
+
+- **AOF `everysec` can lose up to ~1s of writes on an unclean stop.** Vendor-documented
+  behaviour, taken on trust; not reproduced here. It is the stated motivation for
+  `sweep_stalled_jobs`, so if it is wrong, that sweep is defending a narrower window
+  than claimed — the sweep is still correct, the rationale would be overstated.
 
 ## Before any push to a public remote
 Run a secrets scan (`gitleaks detect --source . -v` or trufflehog) against full git
@@ -194,8 +250,11 @@ Chosen option's sources: <https://github.com/selimsef/dfdc_deepfake_challenge/bl
 (MIT, verified) · <https://ai.meta.com/datasets/dfdc/> (no published terms on the
 dataset page; access gated behind an account and an agreement).
 
-**Any future entry here carries its source.** A rejection with reasons but no
-citation is a claim, and this file's whole job is to not be that.
+**Every entry here carries its source — existing ones too, not just new.** A rejection
+with reasons but no citation is a claim, and this file's whole job is to not be that.
+Stating the rule for future entries only would grandfather in exactly the claims that
+have had longest to go stale; see "Provenance of the external-world claims in this
+file", where doing that backfill immediately turned up a false one.
 
 Audio has no checkpoint under this decision and stays on the stub. Expect a mixed
 state: video/image at `research-checkpoint`, audio at `placeholder`. The advisory is
