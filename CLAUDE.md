@@ -170,16 +170,32 @@ a dataset licensor's terms flow through to derived model weights is unsettled an
 jurisdiction-dependent. **Do not ship these weights commercially without legal
 review.** This is a stated, nameable risk; that is why it is written here.
 
-Rejected, with reasons, so they are not re-proposed:
+Rejected, with reasons AND sources so the call can be re-checked rather than taken
+on trust. All assessed 2026-08-17 by reading the licence text, not from memory:
+
 - **FaceForensics++** — non-commercial research/education only, binds a for-profit
-  employer, and requires manual approval. Hard blocker.
+  employer, requires manual approval via form. Hard blocker.
+  <https://kaldir.vc.in.tum.de/faceforensics_tos.pdf> ·
+  <https://github.com/ondyari/FaceForensics>
 - **DeepfakeBench** — CC BY-NC-4.0 (non-commercial) *and* per-detector training data
-  undocumented. Worse on both axes.
-- **Apache-2.0 HuggingFace checkpoints** (ViT/SigLIP) — clean licence but
-  undocumented training data. That is not honesty, it is unverifiability: it cannot
+  undocumented. Worse than the chosen option on both axes, which is why it lost
+  despite shipping EfficientNetB4 weights.
+  <https://github.com/SCLBD/DeepfakeBench>
+- **Apache-2.0 HuggingFace checkpoints** (ViT/SigLIP) — clean licence, undocumented
+  training data, and the wrong architecture for the existing torchvision wrapper.
+  Clean-licence-unknown-provenance is not honesty, it is unverifiability: it cannot
   rule out FF++/DFDC-derived data, train/eval leakage, or simple unsuitability. A
   known, nameable licence risk beats an unknown provenance one; "clearly marked"
-  would have labelled the licence and left the real gap unlabelled.
+  would have labelled the licence and left the actual gap unlabelled.
+  <https://huggingface.co/dima806/deepfake_vs_real_image_detection> ·
+  <https://huggingface.co/prithivMLmods/Deep-Fake-Detector-v2-Model>
+
+Chosen option's sources: <https://github.com/selimsef/dfdc_deepfake_challenge/blob/master/LICENSE>
+(MIT, verified) · <https://ai.meta.com/datasets/dfdc/> (no published terms on the
+dataset page; access gated behind an account and an agreement).
+
+**Any future entry here carries its source.** A rejection with reasons but no
+citation is a claim, and this file's whole job is to not be that.
 
 Audio has no checkpoint under this decision and stays on the stub. Expect a mixed
 state: video/image at `research-checkpoint`, audio at `placeholder`. The advisory is
@@ -282,3 +298,14 @@ Two mutations, not one, when a value is involved: dropping the write and writing
 wrong constant fail differently, and a check that only proves the column exists cannot
 see the second. Mutating real source also forces you to read the file rather than your
 memory of it — that is how the stray `insert_items` docstring was found.
+
+**Witness the mutation before believing the verdict.** Use `scripts/mutate.py`, which
+evaluates a witness snippet against the original and the mutated source and reports
+`NO-OP` — withholding RED/GREEN entirely — when the two behave identically. This is
+not ceremony: a mutation written as `return [] or [...]` edits the source, compiles,
+and reads like a mutation in the diff, while evaluating to the original list. It was
+reported as "the test is vacuous" when the test was fine and the mutation did nothing.
+A no-op mutation and a vacuous test produce byte-identical output, so RED/GREEN cannot
+distinguish them, and the practice that exists to stop tests being trusted blindly was
+itself being trusted blindly. That mutation is kept in `ADVISORY_MUTATIONS` as a
+permanent regression case: the harness must keep reporting NO-OP for it.
