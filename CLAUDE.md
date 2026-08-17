@@ -63,8 +63,11 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   is operational and gets read now; this row is what a dispute reads later, and it
   outlives both.
 - Job status: Redis key + WebSocket push, polling fallback on reconnect. Confirm Redis
-  persistence (AOF/RDB) is on — default in-memory config loses all in-flight job state
-  on restart.
+  persistence is configured — `measured: yes` 2026-08-18, a default `redis:7-alpine`
+  has `appendonly no` but RDB `save` points on, so an unconfigured restart loses up to
+  the last snapshot window (an hour under low write volume), not everything. AOF
+  `everysec` narrows that to ~1s and compose sets it; `assert_persistence_enabled()`
+  refuses to boot without it.
 
 ## Tier 2 — stub, don't skip silently
 - Retention: score-band flag → cold storage, fixed 30-day timer. Call this "extended
@@ -122,11 +125,11 @@ WSL2-enabled NVIDIA driver installs on the Windows host, never inside the WSL di
 NVIDIA is explicit: "This is the only driver you need to install. Do not install any
 Linux display driver in WSL" — installing one can overwrite the host driver mapping,
 since the Windows driver is stubbed into WSL2 as `libcuda.so`.
-[NVIDIA CUDA on WSL guide, read 2026-08-18:
+`measured: no (source)` [NVIDIA CUDA on WSL guide, read 2026-08-18:
 <https://docs.nvidia.com/cuda/wsl-user-guide/index.html>]
 
 `nvidia-container-toolkit` is the Linux-side piece and installs inside a WSL distro,
-not on Windows — same source. But note what was measured here on 2026-08-16: it is
+not on Windows — same source. But `measured: yes` here on 2026-08-16: it is
 **not installed in this machine's Ubuntu**, and `docker run --gpus all` works anyway,
 because Docker Desktop supplies GPU support from its own bundled distro rather than
 from yours. Both statements are true of different distros. Install it only if you run
@@ -135,10 +138,12 @@ it is present.
 
 Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
 before wiring the torch backend into compose — not on the day the weights land.
-[Both verified 2026-08-16 on this box: driver 610.43.02, RTX 4060 Laptop, 8 GB.]
-**CORRECTED 2026-08-18.** This file previously said MinIO's official image had dropped
-curl, and that a `curl -f .../health/live` healthcheck therefore fails regardless of
-whether MinIO is up. **Both halves are false**, checked by running the image:
+[`measured: yes` 2026-08-16 on this box: driver 610.43.02, RTX 4060 Laptop, 8 GB.]
+
+**CORRECTED 2026-08-18.** The old claim was `measured: no (reasoned)` while reading
+exactly like `measured: yes` — the worked example for state 3 below. This file
+previously said MinIO's image had dropped curl, and that a `curl -f .../health/live` healthcheck therefore fails regardless of
+whether MinIO is up. **Both halves are false**, `measured: yes` by running the image:
 `minio/minio:latest` ships curl at `/usr/bin/curl`, and `curl -sf
 http://localhost:9000/minio/health/live` returns exit 0 against a healthy server.
 (`docker run --rm --entrypoint sh minio/minio:latest -c "command -v curl"`, then the
@@ -156,31 +161,77 @@ are the ones that decay silently or were never right. Backfilled 2026-08-18; the
 is not forward-only, and an uncited claim already in the file is the same problem as a
 new one.
 
-Verified by running it on this machine, which is stronger than a citation:
+**Every statement of fact about running software carries an explicit `measured:` tag.**
+Mandatory, and independent of how confident the sentence sounds. There are three
+states, not two:
 
-- **Presigned PUT cannot carry a size cap; a POST policy can.** `scripts/smoke_compose.py`
-  mints a grant with a 1 KiB bound and shows storage accepting a body under it and
-  rejecting one over it with 400, leaving nothing written.
-- **`content-length-range` with `NULLS NOT DISTINCT` needs PG15+**, and without it audio
-  rows (NULL `face_index`) bypass the unique index. Both duplicate shapes confirmed
-  rejected by name against live Postgres 16; see `migrations/002`.
+1. `measured: yes` — someone ran it. Name the command or the probe.
+2. `measured: no (source)` — read in a vendor doc. Cite it.
+3. `measured: no (reasoned)` — worked out from how the thing presumably behaves.
+
+State 3 is the dangerous one, because it is invisible from the outside. The removed
+curl claim was state 3: specific, actionable, load-bearing, and wrong — it named a
+failure mode, prescribed a fix that happened to work, and so nothing ever contradicted
+it. It read exactly like state 1. Confidence is self-report and this claim had plenty
+of it, so the tag cannot be inferred from tone and has to be written down by whoever
+makes the claim, at the moment they make it, when they still know which of the three
+they did.
+
+An untagged factual claim about external software is treated as state 3.
+
+Also applies to code comments asserting external behaviour: cite the probe that
+demonstrates it (`verify_queue.py`, `verify_retention.py`, `verify_attribution.py`,
+`smoke_compose.py`) rather than stating it flat.
+
+`measured: yes` — verified by running it on this machine, which is stronger evidence
+than a citation:
+
+- **Presigned PUT cannot carry a size cap; a POST policy can.** `measured: yes` —
+  `scripts/smoke_compose.py` mints a grant with a 1 KiB bound, then shows storage
+  accepting a body under it and rejecting one over it with 400, writing nothing.
+- **`NULLS NOT DISTINCT` needs PG15+, and without it audio rows (NULL `face_index`)
+  bypass the unique index.** `measured: yes` — both duplicate shapes confirmed rejected
+  by name against live Postgres 16; see `migrations/002`.
 - **Redis Streams: a taken-but-unacked message is claimable by another consumer once
   idle, and XGROUP CREATE at `0` replays entries already in the stream while `$` would
-  abandon them.** `scripts/verify_queue.py`, including the plant-then-destroy case that
-  distinguishes the two.
+  abandon them.** `measured: yes` — `scripts/verify_queue.py`, including the
+  plant-then-destroy case that distinguishes `0` from `$`.
 - **psycopg3 `executemany` is a cursor method; `Connection` has only `execute()`.**
-  Found the hard way — it dead-lettered every job against a real database while the
-  whole suite stayed green.
-- **Redis with default config keeps everything in memory**, so a restart drops job
-  status. `jobstatus.assert_persistence_enabled()` refuses to start without AOF/RDB and
-  is exercised on every worker boot; `appendonly yes` confirmed on the running server.
+  `measured: yes`, the hard way — it dead-lettered every job against a real database
+  while the whole suite stayed green.
+- **This stack's Redis has AOF on.** `measured: yes` — the running server reports
+  `appendonly yes`, and `jobstatus.assert_persistence_enabled()` refuses to start
+  without it, exercised on every worker boot.
+- **CORRECTED 2026-08-18: a default `redis:7-alpine` does NOT keep everything in
+  memory.** `measured: yes` — running the image with no command override reports
+  `appendonly no` but `save 3600 1 300 100 60 10000`, so RDB snapshotting is on by
+  default. A restart loses up to the last save window, which under low write volume
+  can be an hour — not "all in-flight state", which is what this file used to say.
+  Turning AOF on is still right (it narrows that window to ~1s), but the reason was
+  overstated. Found by splitting this from the measured bullet above and then actually
+  running it: those were one bullet until this pass, and merging a measured fact with
+  an assumed one is how the assumed half inherits the other's credibility.
 
-Not independently verified, and flagged rather than dressed up:
+`measured: no` — flagged rather than dressed up:
 
-- **AOF `everysec` can lose up to ~1s of writes on an unclean stop.** Vendor-documented
-  behaviour, taken on trust; not reproduced here. It is the stated motivation for
-  `sweep_stalled_jobs`, so if it is wrong, that sweep is defending a narrower window
-  than claimed — the sweep is still correct, the rationale would be overstated.
+- **AOF `everysec` can lose up to ~1s of writes on an unclean stop.**
+  `measured: no (source)` — vendor-documented, taken on trust, not reproduced here. It
+  is the stated motivation for `sweep_stalled_jobs`, so if it is wrong that sweep
+  defends a narrower window than claimed; the sweep stays correct, the rationale would
+  be overstated.
+- **A crash between the Postgres status write and the Redis push strands the job.**
+  `measured: no (reasoned)` — read off the ordering in `app.py:150-157`, never induced.
+  The code ordering is `measured: yes` (it is in the repo); that a real crash lands in
+  that window often enough to matter is not. `sweep_stalled_jobs` and its live probe
+  are built on this, and both would still be correct if the window turned out rarer
+  than assumed — the honest position is that the defence is cheap, not that the risk is
+  quantified.
+- **Two consumers running different model versions during a rolling deploy.**
+  `measured: no (reasoned)` — the mixed-model state was *constructed* in
+  `verify_attribution.py` by writing differing item sets directly. That the refusal
+  path works is `measured: yes`; that a real rolling deploy produces this state is not,
+  and with atomic `insert_items` it may be hard to reach naturally. Kept as
+  defence-in-depth, not described as a live risk.
 
 ## Before any push to a public remote
 Run a secrets scan (`gitleaks detect --source . -v` or trufflehog) against full git
