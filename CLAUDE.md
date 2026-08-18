@@ -256,6 +256,23 @@ than a citation:
   threshold in hours is far above real processing time; what mattered was the signal,
   not the number.
 
+- **CORRECTED again, same day: the replacement signal was itself broken under the
+  condition it exists for.** `measured: yes` -- `has_message_for` scanned with
+  `xrange(count=1000)` and so returned False for anything past entry 1000. On a
+  1500 deep stream, entry 0 was found and entries 1200 and 1499 were not. That is the
+  destructive direction (a live job reported as having no work, then swept and its
+  upload deleted) and it failed precisely under deep backlog, which is what a worker
+  down for hours produces. It was justified by reasoning about Redis and verified only
+  against worker-down, never against depth. Now paginates the whole stream, and returns
+  True on any uncertainty past a 100k safety bound, because wrongly keeping media costs
+  a delay while wrongly deleting it destroys a good upload. Three shapes are now checked
+  live in `verify_queue.py`: no message at all, a message taken but unacked, and a
+  message past the first page.
+  A probe bug surfaced with it: those checks originally ran on the probe topic, which
+  `has_message_for` does not scan, so every answer was False and the two negative cases
+  passed for no reason. The positive cases failing is what exposed it. A check that can
+  only pass is not a check.
+
 - **A crash between the Postgres status write and the Redis push strands the job.**
   `measured: yes`, and NARROWER than this file implied. Redis being unavailable does
   **not** strand anything: `enforce_rate_limit` is the first line of `mark_uploaded`

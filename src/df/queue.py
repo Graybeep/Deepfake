@@ -397,17 +397,55 @@ class RedisStreamQueue:
         a perfectly good upload.
         """
         for topic in ALL_TOPICS:
-            stream = self._stream(topic)
-            for _entry_id, fields in self.r.xrange(stream, count=1000):
-                data = fields.get("data")
-                if not data:
-                    continue
-                try:
-                    if json.loads(data).get("payload", {}).get("job_id") == job_id:
-                        return True
-                except ValueError:
-                    continue
+            if self._stream_contains(self._stream(topic), job_id):
+                return True
         return False
+
+    # Safety bound on a full scan. Reaching it means the stream is deeper than
+    # anything this design anticipated, and the honest answer becomes "unknown".
+    SCAN_LIMIT = 100_000
+
+    def _stream_contains(self, stream: str, job_id: str) -> bool:
+        """Walk the WHOLE stream, not the first page of it.
+
+        This was `xrange(stream, count=1000)` and returned False for anything
+        past entry 1000. Measured 2026-08-18 on a 1500 deep stream: entry 0 was
+        found, entries 1200 and 1499 were not. That is the destructive
+        direction -- a job reported as having no queued work gets swept and its
+        upload deleted -- and it failed exactly under deep backlog, which is
+        the condition this check exists to handle. A worker down for hours
+        produces precisely that depth.
+
+        On uncertainty this returns True, meaning "assume the job is alive, do
+        not sweep it". Wrongly keeping media costs a delay; wrongly deleting it
+        destroys a user upload that nothing was wrong with.
+        """
+        scanned = 0
+        cursor = "-"
+        while True:
+            batch = self.r.xrange(stream, min=cursor, max="+", count=500)
+            if not batch:
+                return False
+            for entry_id, fields in batch:
+                data = fields.get("data")
+                if data:
+                    try:
+                        if json.loads(data).get("payload", {}).get("job_id") == job_id:
+                            return True
+                    except ValueError:
+                        pass
+                cursor = entry_id
+            scanned += len(batch)
+            if scanned >= self.SCAN_LIMIT:
+                log.warning(
+                    "has_message_for: %s deeper than %d entries, treating job %s "
+                    "as alive rather than risk deleting live work",
+                    stream, self.SCAN_LIMIT, job_id,
+                )
+                return True
+            # xrange min is inclusive, so step past the last id we saw.
+            cursor = f"({cursor}"
+
 
     def requeue_stale_processing(self, topic: str) -> int:
         """No-op: reclaiming is continuous here, not a startup step.

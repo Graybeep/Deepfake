@@ -26,7 +26,7 @@ import time
 sys.path.insert(0, "/app/src")
 
 from df.config import settings  # noqa: E402
-from df.queue import Message, RedisStreamQueue  # noqa: E402
+from df.queue import TOPIC_PREPROCESS, Message, RedisStreamQueue  # noqa: E402
 
 TOPIC = "verify-probe"
 failures: list[str] = []
@@ -140,6 +140,49 @@ def main() -> int:
         a.dead_letter_size(TOPIC) == 1,
         f"claimed {seen} times, dlq={a.dead_letter_size(TOPIC)}",
     )
+
+    # --- has_message_for: the signal sweep_stalled_jobs trusts ---
+    # It decides whether a job is stranded or merely waiting behind a slow
+    # worker. A wrong False gets a healthy job swept and its upload deleted, so
+    # all three shapes are checked here rather than against a fake, which
+    # cannot reproduce XRANGE paging at all.
+    #
+    # These use a REAL topic. has_message_for only scans ALL_TOPICS, so running
+    # them on the probe topic made every answer False and the negative cases
+    # pass for no reason at all -- caught by the positive cases failing.
+    probe_topic = TOPIC_PREPROCESS
+    a.r.delete(a._stream(probe_topic))
+
+    check(
+        "no message means no message (the write/push race this defends)",
+        a.has_message_for("job-never-pushed") is False,
+        "Redis reachable, XADD never issued",
+    )
+
+    a.push(probe_topic, {"job_id": "job-in-pel"})
+    taken = a.pop(probe_topic, timeout=2)
+    check(
+        "a taken but unacked message still counts as alive",
+        a.has_message_for("job-in-pel") is True,
+        "entries are XDELed on ack, so one still present is still work",
+    )
+    if taken:
+        a.ack(taken)
+
+    a.r.delete(a._stream(probe_topic))
+    for i in range(1500):
+        a.push(probe_topic, {"job_id": "bulk-%d" % i})
+    check(
+        "a message past the first page is still found",
+        a.has_message_for("bulk-1499") is True,
+        "returned False when the scan stopped at 1000, and it failed under deep "
+        "backlog, the exact condition this check exists for",
+    )
+    check(
+        "and an absent job is still absent after a full scan",
+        a.has_message_for("job-not-here") is False,
+    )
+    a.r.delete(a._stream(probe_topic))
 
     a.r.delete(a._stream(TOPIC), a._dlq(TOPIC))
     print("\n" + ("all queue checks passed" if not failures else f"FAILURES: {failures}"))
