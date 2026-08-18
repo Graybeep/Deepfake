@@ -66,8 +66,11 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   persistence is configured — `measured: yes` 2026-08-18, a default `redis:7-alpine`
   has `appendonly no` but RDB `save` points on, so an unconfigured restart loses up to
   the last snapshot window (an hour under low write volume), not everything. AOF
-  `everysec` narrows that to ~1s and compose sets it; `assert_persistence_enabled()`
-  refuses to boot without it.
+  `everysec` is set in compose and `assert_persistence_enabled()` refuses to boot
+  without it — but note what that buys: `measured: yes`, a SIGKILL of the Redis
+  process loses nothing even without fsync, because the writes are already in the
+  kernel page cache. AOF is protection against host-level failure, not against a
+  container restart.
 
 ## Tier 2 — stub, don't skip silently
 - Retention: score-band flag → cold storage, fixed 30-day timer. Call this "extended
@@ -214,18 +217,30 @@ than a citation:
 
 `measured: no` — flagged rather than dressed up:
 
-- **AOF `everysec` can lose up to ~1s of writes on an unclean stop.**
-  `measured: no (source)` — vendor-documented, taken on trust, not reproduced here. It
-  is the stated motivation for `sweep_stalled_jobs`, so if it is wrong that sweep
-  defends a narrower window than claimed; the sweep stays correct, the rationale would
-  be overstated.
+- **CORRECTED 2026-08-18: AOF `everysec` does NOT lose writes when the Redis process
+  dies.** `measured: yes` — 50,000 keys written and acked with
+  `--appendonly yes --appendfsync everysec`, then `docker kill` (SIGKILL, no clean
+  shutdown), then restart: **50,000 survived, zero lost.** The reason is that `write()`
+  already handed the data to the kernel; page cache outlives the process. fsync
+  protects against *machine* failure — power loss, kernel panic, VM hard-stop — not
+  against a container dying, being OOM-killed, or being restarted.
+  The ~1s window is real but applies only to host-level failure. `measured: no
+  (source)` for that part, and not measurable here without hard-stopping the machine.
+  This matters for how `sweep_stalled_jobs` is described: the motivating story was
+  "Redis loses the push in its everysec window", and for the common failure — a
+  container restart — that does not happen.
 - **A crash between the Postgres status write and the Redis push strands the job.**
-  `measured: no (reasoned)` — read off the ordering in `app.py:150-157`, never induced.
-  The code ordering is `measured: yes` (it is in the repo); that a real crash lands in
-  that window often enough to matter is not. `sweep_stalled_jobs` and its live probe
-  are built on this, and both would still be correct if the window turned out rarer
-  than assumed — the honest position is that the defence is cheap, not that the risk is
-  quantified.
+  `measured: yes`, and NARROWER than this file implied. Redis being unavailable does
+  **not** strand anything: `enforce_rate_limit` is the first line of `mark_uploaded`
+  and the limiter is Redis-backed, so with Redis stopped the request fails with 500 at
+  the door and the status write never happens. Measured 2026-08-18: job stayed
+  `awaiting_upload`, stream length 0, nothing stranded.
+  The strand needs Redis alive enough to pass the rate limiter AND the status publish,
+  then to fail in the window between the Postgres commit and the XADD — microseconds,
+  not "Redis crashed". `sweep_stalled_jobs` stays: the window is real and the defence
+  is cheap. But it defends a far rarer event than "Redis went down", and the 6-hour
+  threshold should be read in that light rather than as protection against a routine
+  outage.
 - **Two consumers running different model versions during a rolling deploy.**
   `measured: no (reasoned)` — the mixed-model state was *constructed* in
   `verify_attribution.py` by writing differing item sets directly. That the refusal
