@@ -478,3 +478,24 @@ A no-op mutation and a vacuous test produce byte-identical output, so RED/GREEN 
 distinguish them, and the practice that exists to stop tests being trusted blindly was
 itself being trusted blindly. That mutation is kept in `ADVISORY_MUTATIONS` as a
 permanent regression case: the harness must keep reporting NO-OP for it.
+
+**Mutate a predicate in BOTH directions, and give every setup a positive control.**
+Two distinct failures, learned the hard way one after the other:
+
+- *One direction is not enough.* Mutating `has_message_for` to constant False turns
+  only the positive checks red; constant True turns only the negative ones red. A
+  suite mutated one way looks fully covered while half of it observes nothing.
+  Demonstrated 2026-08-18; both directions are recorded in `verify_queue.py`.
+- *A passing negative check proves nothing without a positive control in the same
+  setup.* The `has_message_for` checks first ran on the probe topic, which the
+  function does not scan, so every answer was False and both negative checks passed
+  for no reason at all. No mutation of the function would have exposed that, because
+  the function was never reached. What exposed it was the positive checks in the same
+  setup failing. So: any block asserting "X is absent" needs a sibling asserting "X is
+  present", or it is only evidence that the setup is broken in the convenient
+  direction.
+
+The harness has no check of its own either. A wrapper around this reported
+"16 PASS / 0 FAIL" under a mutation that manually produces 2 FAIL, almost certainly
+execing against a container that had not finished rebuilding. Witness the mutation
+inside the environment the test actually runs in, not just in the source tree.
