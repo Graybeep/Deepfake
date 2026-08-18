@@ -41,6 +41,10 @@ TOPIC_PREPROCESS = "preprocess"
 TOPIC_INFERENCE = "inference"
 TOPIC_AGGREGATE = "aggregate"
 
+# Every topic a job can legitimately be waiting on. Used to tell "no message
+# will ever come" apart from "a worker is behind", which age alone cannot do.
+ALL_TOPICS = (TOPIC_PREPROCESS, TOPIC_INFERENCE, TOPIC_AGGREGATE)
+
 
 @dataclass
 class Message:
@@ -70,6 +74,7 @@ class Queue(Protocol):
     def ack(self, msg: Message) -> None: ...
     def fail(self, msg: Message, error: str) -> bool: ...
     def dead_letter_size(self, topic: str) -> int: ...
+    def has_message_for(self, job_id: str) -> bool: ...
 
 
 class RedisQueue:
@@ -146,6 +151,18 @@ class RedisQueue:
 
     def dead_letter_size(self, topic: str) -> int:
         return int(self.r.llen(self._dlq(topic)))
+
+    def has_message_for(self, job_id: str) -> bool:
+        """Same question for the list backend: queued or in flight anywhere."""
+        for topic in ALL_TOPICS:
+            for key in (self._key(topic), self._processing(topic)):
+                for raw in self.r.lrange(key, 0, -1):
+                    try:
+                        if json.loads(raw).get("payload", {}).get("job_id") == job_id:
+                            return True
+                    except ValueError:
+                        continue
+        return False
 
     def requeue_stale_processing(self, topic: str) -> int:
         """Move anything stranded in the processing list back onto the queue.
@@ -367,6 +384,31 @@ class RedisStreamQueue:
     def dead_letter_size(self, topic: str) -> int:
         return int(self.r.llen(self._dlq(topic)))
 
+    def has_message_for(self, job_id: str) -> bool:
+        """Is there still queued work for this job, anywhere?
+
+        Entries are XDELed on ack, so anything left in a stream is either
+        undelivered or in some consumer pending list. Either way the job is
+        alive and a sweep must not call it stalled.
+
+        This exists because age is a bad proxy on its own. A job queued behind a
+        worker that has been down for hours looks exactly like a job whose
+        message was never written, and treating the first as the second deletes
+        a perfectly good upload.
+        """
+        for topic in ALL_TOPICS:
+            stream = self._stream(topic)
+            for _entry_id, fields in self.r.xrange(stream, count=1000):
+                data = fields.get("data")
+                if not data:
+                    continue
+                try:
+                    if json.loads(data).get("payload", {}).get("job_id") == job_id:
+                        return True
+                except ValueError:
+                    continue
+        return False
+
     def requeue_stale_processing(self, topic: str) -> int:
         """No-op: reclaiming is continuous here, not a startup step.
 
@@ -418,3 +460,12 @@ class InMemoryQueue:
 
     def dead_letter_size(self, topic: str) -> int:
         return len(self.dead.get(topic, []))
+
+    def has_message_for(self, job_id: str) -> bool:
+        for encoded in [m for q in self.queues.values() for m in q]:
+            try:
+                if json.loads(encoded).get("payload", {}).get("job_id") == job_id:
+                    return True
+            except ValueError:
+                continue
+        return False

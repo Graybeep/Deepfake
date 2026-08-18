@@ -351,3 +351,58 @@ def test_the_two_sweeps_do_not_overlap(db, storage):
     assert abandoned == ["job-gh"]
     assert not media_present(storage, dl_raw, dl_derived)
     assert not media_present(storage, gh_raw, gh_derived)
+
+
+# --- stalled vs merely backlogged -------------------------------------------
+
+
+def test_a_backlogged_job_is_not_swept_as_stalled(db, storage):
+    """Age cannot tell "no message will ever come" from "a worker is behind".
+
+    Measured against the live stack 2026-08-18: a job queued 9h earlier, whose
+    message was still sitting in the stream, was marked failed with the reason
+    "no queue message" -- untrue of it -- and its upload would then have been
+    deleted by the terminal sweep. A worker down longer than the threshold is
+    far more likely than the microseconds-wide race this sweep defends, so
+    without consulting the queue it destroys more good jobs than bad.
+    """
+    from df.queue import TOPIC_PREPROCESS, InMemoryQueue
+
+    raw, derived = seed(db, storage, "job-backlogged", status="queued")
+    db.jobs["job-backlogged"]["updated_at"] = LONG_AGO
+
+    queue = InMemoryQueue()
+    queue.push(TOPIC_PREPROCESS, {"job_id": "job-backlogged", "media_type": "video"})
+
+    marked = sweep_stalled_jobs(db, queue, older_than_hours=6, now=NOW)
+
+    assert marked == [], "a job with work still queued was called stalled"
+    assert db.jobs["job-backlogged"]["status"] == "queued", "row was failed anyway"
+    assert media_present(storage, raw, derived), "upload was destroyed"
+
+
+def test_a_genuinely_stranded_job_is_still_swept(db, storage):
+    """The other half. With no message anywhere, nothing will ever advance it."""
+    from df.queue import InMemoryQueue
+
+    seed(db, storage, "job-stranded", status="queued")
+    db.jobs["job-stranded"]["updated_at"] = LONG_AGO
+
+    marked = sweep_stalled_jobs(db, InMemoryQueue(), older_than_hours=6, now=NOW)
+
+    assert marked == ["job-stranded"]
+    assert db.jobs["job-stranded"]["status"] == "failed"
+
+
+def test_the_queue_check_looks_across_every_topic(db, storage):
+    """A job part-way through is queued on inference or aggregate, not
+    preprocess. Checking one topic would call those stalled."""
+    from df.queue import TOPIC_AGGREGATE, InMemoryQueue
+
+    seed(db, storage, "job-midway", status="aggregating")
+    db.jobs["job-midway"]["updated_at"] = LONG_AGO
+
+    queue = InMemoryQueue()
+    queue.push(TOPIC_AGGREGATE, {"job_id": "job-midway", "media_type": "video"})
+
+    assert sweep_stalled_jobs(db, queue, older_than_hours=6, now=NOW) == []

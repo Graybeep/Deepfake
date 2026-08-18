@@ -42,6 +42,7 @@ import time
 
 from df import storage as storage_mod
 from df.db import Db
+from df.queue import build_queue
 from df.retention import (
     DeleteOutcome,
     sweep_abandoned_uploads,
@@ -60,6 +61,9 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     db, storage = Db(), storage_mod.build_storage()
+    # Needed so the stalled sweep can tell a backlogged job from a
+    # stranded one rather than inferring it from age.
+    queue = build_queue()
     log.info("retention sweeper up, interval=%ds", INTERVAL_SECONDS)
 
     while True:
@@ -68,7 +72,7 @@ def main() -> None:
         # layer the stalled path would otherwise lack. Running it first means
         # the handoff completes in this pass rather than the next one.
         try:
-            stalled = sweep_stalled_jobs(db, limit=200)
+            stalled = sweep_stalled_jobs(db, queue, limit=200)
             if stalled:
                 log.warning(
                     "sweeper marked %d stalled job(s) failed -- stuck in an in-flight "

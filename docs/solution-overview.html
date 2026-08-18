@@ -486,7 +486,7 @@
       <tr><td>Object storage</td><td>MinIO locally, S3 when deployed</td><td>Same upload behaviour in both, so nothing changes between them. MinIO simply disappears from the setup when deployed.</td></tr>
       <tr><td>Packaging</td><td>Docker and Docker Compose</td><td>One image per service, and the network isolation is written down rather than assumed.</td></tr>
       <tr><td>GPU</td><td>NVIDIA CUDA through WSL2</td><td>Checked on an RTX 4060 with 8 GB before any model code was wired in.</td></tr>
-      <tr><td>Testing</td><td>pytest, plus live checks</td><td>154 automated tests, plus scripts that check the running system against a real database, real Redis and a real bucket.</td></tr>
+      <tr><td>Testing</td><td>pytest, plus live checks</td><td>157 automated tests, plus scripts that check the running system against a real database, real Redis and a real bucket.</td></tr>
       <tr><td>Supply chain</td><td>gitleaks</td><td>A secrets scan over the full history runs before anything is pushed publicly.</td></tr>
     </tbody>
   </table>
@@ -535,7 +535,7 @@
   <table class="status">
     <tbody>
       <tr><td>&#10004;</td><td>The full stack runs end to end and every live check passes</td></tr>
-      <tr><td>&#10004;</td><td>154 automated tests passing, plus 60 or so checks against the running system</td></tr>
+      <tr><td>&#10004;</td><td>157 automated tests passing, plus 60 or so checks against the running system</td></tr>
       <tr><td>&#10004;</td><td>Deletion confirmed by looking in the bucket, not by trusting a flag in the database</td></tr>
       <tr><td>&#10004;</td><td>The hold flag was proven to actually block deletion, on every path that can delete</td></tr>
       <tr><td>&#10004;</td><td>The audit trail is checked by reading the database columns back, not by trusting the API response</td></tr>

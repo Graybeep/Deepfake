@@ -217,6 +217,17 @@ than a citation:
 
 `measured: no` — flagged rather than dressed up:
 
+- **`min_confidence=0.3` and `trim_frac=0.1` have never affected a single result.**
+  `measured: yes` that they are inert, `measured: no` that the values are right. Across
+  378 item rows the lowest confidence ever produced is 0.6, so nothing has ever been
+  dropped. Across 40 decisions and 228 items, zero were trimmed: 10 percent of a 6 item
+  job floors to 0, and most jobs carry fewer than 10 items. So the aggregation that this
+  project describes as a confidence weighted trimmed mean has in practice been a
+  weighted mean with no trimming and no dropping. Confidence WEIGHTING does happen, the
+  weights genuinely differ. The two robustness mechanisms are what have never fired.
+  They are untuned defaults wearing the appearance of tuned ones, and they cannot be
+  tuned until real weights produce a real score and confidence distribution.
+
 - **CORRECTED 2026-08-18: AOF `everysec` does NOT lose writes when the Redis process
   dies.** `measured: yes` — 50,000 keys written and acked with
   `--appendonly yes --appendfsync everysec`, then `docker kill` (SIGKILL, no clean
@@ -229,6 +240,22 @@ than a citation:
   This matters for how `sweep_stalled_jobs` is described: the motivating story was
   "Redis loses the push in its everysec window", and for the common failure — a
   container restart — that does not happen.
+- **CORRECTED 2026-08-18: the stalled sweep fired on healthy jobs.** `measured: yes`
+  -- a job queued 9h earlier whose message was still sitting in the stream was marked
+  failed with the reason "stalled in-flight with no queue message", which was simply
+  untrue of it, and the terminal sweep would then have deleted its upload. Age cannot
+  tell "no message will ever come" from "a worker is behind", and after the correction
+  below the second case is far MORE likely than the first: a worker down for over 6h is
+  ordinary, the write/push race is microseconds wide. The sweep was destroying more good
+  jobs than bad. `sweep_stalled_jobs` now asks the queue directly via
+  `has_message_for()` across every topic and skips any job with work still waiting.
+  Verified live: backlogged job untouched and still `queued`, genuinely stranded job
+  still swept.
+  Note what this means about threshold tuning: 6h was never the load-bearing part. The
+  queue check is. Measured job duration is 0.65s at worst over 65 jobs, so any
+  threshold in hours is far above real processing time; what mattered was the signal,
+  not the number.
+
 - **A crash between the Postgres status write and the Redis push strands the job.**
   `measured: yes`, and NARROWER than this file implied. Redis being unavailable does
   **not** strand anything: `enforce_rate_limit` is the first line of `mark_uploaded`

@@ -30,7 +30,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from df import storage as storage_mod
 from df.config import settings
@@ -331,6 +331,7 @@ def sweep_abandoned_uploads(
 
 def sweep_stalled_jobs(
     store: RetentionStore,
+    queue: Any | None = None,
     *,
     older_than_hours: int | None = None,
     limit: int = 100,
@@ -345,8 +346,11 @@ def sweep_stalled_jobs(
     row with no message to advance it. It will never complete and never
     dead-letter, so no other sweep covers it while it holds a raw upload.
 
-    The threshold is a proxy for "no message exists", because the job row
-    cannot tell us that directly. Set it far above real processing time: the
+    Pass `queue` and the proxy stops being a guess: the sweep asks the queue
+    directly whether work for this job is still waiting, and skips it if so.
+    Without a queue it falls back to age alone, which is unsafe under backlog.
+
+    The threshold is the secondary signal, for how long to wait before asking. Set it far above real processing time: the
     cost of being wrong is failing a job that was merely slow, and the client
     can resubmit, but the cost of never sweeping is media retained forever.
 
@@ -380,6 +384,21 @@ def sweep_stalled_jobs(
 
     marked: list[str] = []
     for job_id in store.find_stalled_in_flight(cutoff, limit=limit):
+        # Age alone cannot tell "no message will ever come" from "a worker is
+        # behind". Measured 2026-08-18: a job queued 9h ago whose message was
+        # still sitting in the stream was marked failed with the reason
+        # "no queue message", which was simply untrue of it. Its upload would
+        # then have been deleted by the terminal sweep, and the worker would
+        # have picked the message up afterwards and failed on missing media.
+        # A worker down for longer than the threshold is far more likely than
+        # the microseconds-wide write/push race this sweep actually defends,
+        # so without this check the sweep destroys more good jobs than bad.
+        if queue is not None and queue.has_message_for(job_id):
+            log.info(
+                "retention: job %s is old but its work is still queued, not stalled",
+                job_id,
+            )
+            continue
         store.mark_job_failed(
             job_id, f"stalled in-flight with no queue message for over {hours}h"
         )
