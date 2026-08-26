@@ -1,4 +1,4 @@
-"""Fail if docs/ states a test count that is not the real one.
+"""Fail if a tracked document states a test count that is not the real one.
 
 The docs rule in CLAUDE.md says the solution document regenerates in the same
 commit as any schema or test-count change. That rule has now lost to a human
@@ -12,7 +12,7 @@ So this is mechanical. Run standalone or from .githooks/pre-commit:
     python scripts/check_docs_current.py
 
 It deliberately checks only what can be checked without judgement: the number of
-tests the document claims versus the number pytest actually collects. It cannot
+tests each document claims versus the number pytest actually collects. It cannot
 tell whether the prose still describes the system -- that still needs a person --
 but the counted claims are exactly the ones that drifted both times.
 """
@@ -24,12 +24,31 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "solution-overview.html"
 
-# Every place the document commits to a number of tests.
-CLAIM_PATTERNS = [
-    re.compile(r"(\d+)\s+unit/integration tests"),
-    re.compile(r"(\d+)\s+automated tests passing"),
+# Every tracked document that commits to a number of tests, with the patterns
+# that express the claim in that document.
+#
+# README.md is here because scoping this check to docs/ was itself the bug. The
+# rule it enforces is "a tracked document that is stale is worse than no
+# document", and that applies to every tracked document -- but the checker
+# watched one of them. README.md drifted to 106 against an actual 157 while
+# docs/ stayed correct, and nothing noticed, because the guard for exactly this
+# failure was pointed somewhere else. Any new document making a counted claim
+# belongs in this list on the day it starts making it.
+DOCUMENTS = [
+    (
+        pathlib.Path("docs") / "solution-overview.html",
+        [
+            re.compile(r"(\d+)\s+unit/integration tests"),
+            re.compile(r"(\d+)\s+automated tests passing"),
+        ],
+    ),
+    (
+        pathlib.Path("README.md"),
+        [
+            re.compile(r"(\d+)\s+tests, no infrastructure required"),
+        ],
+    ),
 ]
 
 
@@ -56,40 +75,64 @@ def collected_test_count() -> int:
 
 
 def main() -> int:
-    if not DOC.exists():
-        print(f"{DOC.relative_to(ROOT)} is missing")
-        return 1
-
     actual = collected_test_count()
-    text = DOC.read_text(encoding="utf-8")
 
     stale: list[str] = []
-    found_any = False
-    for pattern in CLAIM_PATTERNS:
-        for claimed in pattern.findall(text):
-            found_any = True
-            if int(claimed) != actual:
-                stale.append(f"  document says {claimed}, pytest collects {actual}")
+    silent: list[str] = []
+    missing: list[str] = []
 
-    if not found_any:
-        print("no test-count claim found in the document -- the check has silently "
-              "stopped checking anything. Update CLAIM_PATTERNS to match the doc.")
+    for relpath, patterns in DOCUMENTS:
+        doc = ROOT / relpath
+        if not doc.exists():
+            missing.append(str(relpath))
+            continue
+
+        text = doc.read_text(encoding="utf-8")
+        found_any = False
+        for pattern in patterns:
+            for claimed in pattern.findall(text):
+                found_any = True
+                if int(claimed) != actual:
+                    stale.append(f"  {relpath}: says {claimed}, pytest collects {actual}")
+
+        # Per document, not across all of them. A document whose wording drifted
+        # out of every one of its patterns is no longer being checked at all,
+        # and another document still matching would otherwise hide that.
+        if not found_any:
+            silent.append(str(relpath))
+
+    if missing:
+        print("missing:")
+        for path in missing:
+            print(f"  {path}")
+        return 1
+
+    if silent:
+        print("no test-count claim found in:")
+        for path in silent:
+            print(f"  {path}")
+        print(
+            "\nThe check has silently stopped checking that document. Either "
+            "restore the claim or update its patterns in DOCUMENTS."
+        )
         return 1
 
     if stale:
-        print("docs/ is stale:")
+        print("stale test-count claims:")
         print("\n".join(stale))
         print(
-            "\nRegenerate in this same commit, per CLAUDE.md:\n"
+            "\nUpdate every document above in this same commit, per CLAUDE.md.\n"
+            "For docs/solution-overview.html the PDF regenerates with it:\n"
             "  1. edit docs/solution-overview.html\n"
             "  2. chrome --headless --disable-gpu --no-pdf-header-footer \\\n"
             "       --print-to-pdf=docs/Deepfake-Detection-Solution.pdf \\\n"
             "       file:///.../docs/solution-overview.html\n"
-            "  3. git add docs/"
+            "  3. git add docs/ README.md"
         )
         return 1
 
-    print(f"docs/ test count current ({actual})")
+    checked = ", ".join(str(relpath) for relpath, _ in DOCUMENTS)
+    print(f"test count current ({actual}) in: {checked}")
     return 0
 
 

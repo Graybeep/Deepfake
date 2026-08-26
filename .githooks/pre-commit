@@ -2,18 +2,24 @@
 # Enable once per clone:  git config core.hooksPath .githooks
 #
 # Two checks, both mechanical, both for things a written rule already lost to:
-#   1. docs/ must not claim a test count that is not the real one.
+#   1. no tracked document may claim a test count that is not the real one.
 #   2. a schema change must carry the doc regeneration in the SAME commit.
 #
-# Neither can judge whether the prose still describes the system. They only
+# Check 1 covers every document in check_docs_current.DOCUMENTS -- currently
+# docs/solution-overview.html and README.md. It was scoped to docs/ alone until
+# 2026-08-26, and in that window README.md drifted to 106 against an actual 157
+# without anything noticing. The guard for that exact failure was pointed at the
+# wrong file.
+#
+# Neither check can judge whether the prose still describes the system. They only
 # catch the counted claims and the schema case, which is what actually drifted.
 
 set -e
 
 python scripts/check_docs_current.py || {
     echo ""
-    echo "pre-commit: docs/ is stale. Fix it or commit with --no-verify if you"
-    echo "genuinely mean to leave it that way."
+    echo "pre-commit: a tracked document is stale. Fix it or commit with"
+    echo "--no-verify if you genuinely mean to leave it that way."
     exit 1
 }
 

@@ -219,6 +219,15 @@
   also weighted down by how confident the face detection was, so a frame where the face
   was barely found counts for less.</p>
 
+  <p><strong>Two of those three mechanisms have never actually fired.</strong> The
+  confidence weighting is real and does change results. The trimming and the
+  low confidence dropping have not: across 378 scored items the lowest confidence ever
+  produced was 0.6, so the 0.3 cutoff has never dropped anything, and trimming 10 percent
+  of a six item job rounds down to nothing, which is most jobs. So what has run so far is
+  a weighted mean, not a trimmed one. The settings are untuned defaults that look like
+  tuned ones, and they cannot be tuned until real weights produce a real spread of scores
+  and confidences. This is written down rather than left for someone to discover.</p>
+
   <h3>2.3 Refuse to guess</h3>
   <p>If face detection finds nothing at all, the result is <code>undetermined</code>. It
   is never quietly turned into "authentic". If there is more than one face, each one is

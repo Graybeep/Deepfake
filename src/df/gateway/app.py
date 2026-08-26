@@ -139,7 +139,12 @@ def create_job(body: CreateJobRequest, request: Request) -> CreateJobResponse:
 
 @app.post("/v1/jobs/{job_id}/uploaded", status_code=202)
 def mark_uploaded(job_id: str, request: Request) -> dict:
-    """Client calls this after the presigned PUT succeeds; this enqueues work."""
+    """Client calls this after the presigned upload POST succeeds; enqueues work.
+
+    POST, not PUT -- see the module docstring and storage.presign_upload. The
+    grant is a POST policy precisely so the size cap is a signed condition
+    storage enforces; saying "PUT" here invites someone to build one.
+    """
     enforce_rate_limit(request)
 
     job = _db.get_job(job_id)

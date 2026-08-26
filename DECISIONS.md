@@ -93,10 +93,25 @@ question. Tunable via `AggregationParams.min_items_for_score`.
 
 **Stub inference backend is the default.** No EfficientNet weights are vendored.
 `DF_INFERENCE_BACKEND=stub` runs a deterministic hash-based scorer so the whole
-pipeline can be built and tested; it reports `is_real_detector=False` and its
-`model_version_id` contains `stub`, so no stored result can be mistaken for a
-real detection. The API attaches a placeholder advisory to any result carrying a
-stub model id. Switch to `torch` once weights exist.
+pipeline can be built and tested; it reports `is_real_detector=False` and
+declares `validation=placeholder`. Switch to `torch` once weights exist.
+
+**CORRECTED.** This used to say the API "attaches a placeholder advisory to any
+result carrying a stub model id" — i.e. it matched the substring `stub` against
+`model_version_id`. That failed **open**. Loading a real checkpoint changes the
+id to `face-efficientnet_b4-<hash>`, the substring vanishes, and every caveat
+disappears silently — at exactly the moment scores start looking plausible
+enough to be believed.
+
+The advisory is now derived from `ModelVersion.validation`, a required field
+(`placeholder` / `research-checkpoint` / `production-validated`) written onto
+each item row and rolled up by the router from the rows that actually produced
+the score. NULL or any unrecognised value produces the **strongest** caveat, not
+none. Do not reintroduce a check keyed on how a model is named.
+
+Where: `src/df/gateway/app.py` (`_validation_advisories`),
+`tests/test_validation_advisory.py`, and `ADVISORY_MUTATIONS` in
+`scripts/mutate.py`, which keeps the fail-open version as a regression case.
 
 **Confidence weighting uses detection/alignment confidence, not model
 confidence.** The model's own output says nothing about whether it got a clean
@@ -107,9 +122,22 @@ confidence through instead of the model's.
 retries it; if the result write had failed after deletion, the inputs needed to
 reproduce it would already be gone.
 
-**Redis lists, not Streams.** Streams consumer groups are week 2+ per CLAUDE.md.
-Lists with a processing-list handoff give at-least-once delivery, which is enough
-while workers are idempotent.
+**Redis Streams, not lists — REVERSED 2026-08-16.** This originally read "Redis
+lists, not Streams; Streams consumer groups are week 2+ per CLAUDE.md". Streams
+is now the default (`DF_QUEUE_BACKEND=streams`) and lists are kept only as a
+rollback path; both write the same `q:<topic>:dead` list, so there is one place
+to look either way.
+
+What the reversal buys: any live consumer can reclaim a message whose worker
+stopped without acking it, once idle past `DF_QUEUE_RECLAIM_MS` (XAUTOCLAIM). So
+recovery no longer requires a worker restart, and a topic can have more than one
+consumer — which is what makes the GPU worker horizontally scalable. Under
+lists, a message stranded while all workers stayed up was invisible until the
+retention sweeper caught the job hours later.
+
+`measured: yes` — `scripts/verify_queue.py`, which must run inside a container:
+Redis is on the internal network, and publishing a host port to test it would
+weaken the isolation being tested.
 
 **Plain SQL migrations, not Alembic.** The schema is small and the retention
 logic needs to be readable by anyone reviewing it. Revisit if it starts churning.

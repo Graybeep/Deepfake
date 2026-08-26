@@ -5,13 +5,16 @@ score-band routing, and retention logic.
 
 **Read `CLAUDE.md` before changing anything touching deletion, retention, or
 claims about what is built.** `DECISIONS.md` records the judgement calls made
-during scaffolding and the four open questions that need a human answer.
+during scaffolding and the two open questions that still need a human answer.
 
 > **The detector is a placeholder.** The default inference backend
 > (`DF_INFERENCE_BACKEND=stub`) is a deterministic hash-based scorer, not a
 > trained model. It exists so the pipeline can be built and tested before
-> weights land. Every stub result reports `is_real_detector=false`, carries
-> `stub` in its `model_version_id`, and the API attaches an advisory to it.
+> weights land. Every stub result reports `is_real_detector=false` and declares
+> `validation=placeholder`, and the API derives its advisory from that declared
+> level — **never** from how the model is named. A name-based check fails open:
+> load a real checkpoint, the id stops containing `stub`, and every caveat
+> disappears at exactly the moment scores start looking believable.
 
 ---
 
@@ -33,7 +36,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-106 tests, no infrastructure required. The suite covers the two pipeline rules
+157 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -52,9 +55,8 @@ or the WebSocket transport. Those need compose.
 
 ## Run the full service
 
-`docker compose up` has **not been run end to end yet** — Docker was not
-installed on the development machine. The compose file and Dockerfiles are
-written and reviewed but unverified; expect to fix something on first run.
+`docker compose up` **runs end to end** — `measured: yes` 2026-08-16 on the
+development machine, gated by `scripts/smoke_compose.py`.
 
 ```bash
 cp .env.example .env
@@ -80,14 +82,19 @@ presigned upload, the queue between containers, the audit trail on a real job,
 that the bytes are actually gone from the bucket afterwards, and that the rate
 limiter returns 429 under burst. It exits non-zero on the first failure.
 
-Per CLAUDE.md, **no Kubernetes manifests until this runs end to end.**
+The old gate — no Kubernetes manifests until compose runs end to end — is
+**satisfied**, so K8s is schedulable rather than forbidden. It is still not
+next: on a single GPU node it buys nothing compose does not already do, while
+cluster provisioning, secrets, ingress and PVCs remain multi-day work. Per
+CLAUDE.md the trigger is a second node, a real availability requirement, or
+autoscaling the GPU pod — **not** the availability of time.
 
 ---
 
 ## Architecture
 
 ```
-                  ┌──────────┐   presigned PUT    ┌────────┐
+                  ┌──────────┐  presigned POST    ┌────────┐
    client ───────▶│ gateway  │───────────────────▶│  S3    │
                   └────┬─────┘                    └───┬────┘
                        │ enqueue                      │
@@ -123,6 +130,18 @@ Never a plain mean: a plain mean lets a handful of bad frames drag a verdict
 around and gives low-confidence detections the same vote as clean ones.
 
 The method name and exact params are written onto every job row.
+
+**Two of the three mechanisms in that name have never once fired.**
+`measured: yes` that they are inert; `measured: no` that the values are right.
+Across 378 item rows the lowest confidence ever produced is 0.6, so
+`min_confidence=0.3` has never dropped anything. Across 40 decisions and 228
+items, zero were trimmed: `trim_frac=0.1` of a 6-item job floors to 0, and most
+jobs carry fewer than 10 items. So in practice this has been a **weighted mean
+with no trimming and no dropping**. The confidence *weighting* is real — the
+weights genuinely differ. The two robustness mechanisms are the ones that have
+never engaged. They are untuned defaults wearing the appearance of tuned ones,
+and they cannot be tuned until real weights produce a real score and confidence
+distribution.
 
 ### Score bands
 
@@ -184,8 +203,8 @@ a delete path that was simply broken.
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/v1/jobs` | Rate-limited. Returns a presigned PUT URL; media never transits the API. |
-| `POST` | `/v1/jobs/{id}/uploaded` | Client calls after the PUT succeeds. Idempotent. |
+| `POST` | `/v1/jobs` | Rate-limited. Returns a presigned **POST policy** (url + form fields), not a PUT URL; media never transits the API. |
+| `POST` | `/v1/jobs/{id}/uploaded` | Client calls after the upload POST succeeds. Idempotent. |
 | `GET` | `/v1/jobs/{id}` | Result + status. **Polling fallback** after a dropped socket. |
 | `WS` | `/v1/jobs/{id}/ws` | Live status. Sends current state on connect so a reconnecting client never waits on a transition it missed. |
 | `GET` | `/healthz` | |
@@ -194,18 +213,39 @@ Every result carries advisories: scores are manipulable by adversarial
 perturbation (no pre-classifier — Tier 3, not built), and whether a placeholder
 model produced the score.
 
+### Why the upload grant is a POST policy, not a PUT URL
+
+This is load-bearing, not a style choice. A presigned **PUT** signs the URL but
+not the body length, so an issued grant is an **unbounded write** to the bucket.
+A **POST policy** can carry a `content-length-range` condition that object
+storage itself enforces.
+
+These bytes go straight from the browser to storage and never traverse the
+gateway, so ingress rate limiting never sees them. That makes the policy
+condition the *only* place `DF_MAX_UPLOAD_BYTES` can be enforced at all — the
+`size_bytes` check on `POST /v1/jobs` is a courtesy 413 on the client's own
+word, and a client that lies simply skips it.
+
+`measured: yes` — `scripts/smoke_compose.py` mints a grant with a 1 KiB bound,
+then shows storage accepting a body under it and rejecting one over it with 400,
+writing nothing. `tests/test_presign_policy.py` proves the code still asks for
+the condition; only the live probe proves storage honours it.
+
 ## Layout
 
 ```
-migrations/          ordered SQL; 001 creates jobs + hold flag
-scripts/             migrate.py, run_local.py
+migrations/          ordered SQL, 001-005; 001 creates jobs + hold flag
+scripts/             migrate.py, run_local.py, mutate.py,
+                     check_docs_current.py, and the live probes:
+                     smoke_compose.py, verify_queue.py,
+                     verify_retention.py, verify_attribution.py
 src/df/
-  aggregation.py     weighted trimmed mean
+  aggregation.py     confidence-weighted trimmed mean
   bands.py           score-band routing
   retention.py       TTL delete + hold-flag check + sweeper
   rollup.py          multi-face worst-case rollup
   ratelimit.py       Redis token bucket (atomic Lua)
-  queue.py           Redis lists + retry limit + DLQ
+  queue.py           Redis Streams (default) or lists + retry limit + DLQ
   jobstatus.py       status key + pub/sub + persistence assertion
   storage.py         presigned uploads, deletes, in-memory backend
   inference/         detector interface, stub, EfficientNet, calibration

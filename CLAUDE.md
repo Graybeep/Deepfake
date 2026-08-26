@@ -407,22 +407,43 @@ pass" as "the system works."
 with headless Chrome. Any change to the schema, the test count, or what the system
 claims to do regenerates both **in the same commit as the change**, not afterwards.
 
-This has drifted twice already — first still claiming a 5-day sprint and 114 tests,
-then 139 against an actual 147 — and both times it was caught by someone asking rather
-than by anything in the process. A tracked document is worse than an untracked one
-when it is stale, because being in the repo is itself a claim that it is current.
+This has drifted three times now — first still claiming a 5-day sprint and 114 tests,
+then 139 against an actual 147, then **README.md at 106 against an actual 157** — and
+every time it was caught by someone asking rather than by anything in the process. A
+tracked document is worse than an untracked one when it is stale, because being in the
+repo is itself a claim that it is current.
 A written rule already lost to a human forgetting twice, so it is now mechanical.
 `.githooks/pre-commit` runs `scripts/check_docs_current.py`, which fails the commit
-when the document claims a test count pytest does not collect, and separately fails a
-commit that touches `migrations/` without touching `docs/`. Enable it once per clone:
+when a tracked document claims a test count pytest does not collect, and separately
+fails a commit that touches `migrations/` without touching `docs/`. Enable it once per
+clone:
 
     git config core.hooksPath .githooks
 
 The hook checks only what can be checked without judgement — the counted claims and
-the schema case, which are exactly what drifted both times. Whether the prose still
+the schema case, which are exactly what drifted all three times. Whether the prose still
 describes the system is still a person's job. `--no-verify` exists for the case where
 a migration genuinely changes nothing the document describes; reaching for it
 routinely means the rule is wrong and should be changed rather than bypassed.
+
+**The third drift was the guard's own scope, and that is the lesson worth keeping.**
+The checker was written to stop test-count drift and then pointed at `docs/` alone,
+so `README.md` drifted 51 tests while `docs/` stayed correct and the hook passed
+every commit. The rule was never "docs/ must be current" — it is "a tracked document
+that is stale is worse than none" — and that applies to every tracked document.
+`check_docs_current.DOCUMENTS` now lists `docs/solution-overview.html` **and**
+`README.md`; any new document making a counted claim goes in that list on the day it
+starts making it. The check also fails when a document matches *none* of its own
+patterns, so a reworded claim surfaces as "silently stopped checking" rather than
+passing — that direction is verified too, not just the wrong-number one.
+
+Corrected 2026-08-26 in the same pass that found it, along with nine other stale
+claims in `README.md` and `DECISIONS.md`: the compose gate described as unsatisfied,
+the queue described as Redis lists, the upload grant described as a presigned PUT in
+three places, and the model advisory described as matching the substring `stub`
+against `model_version_id` — the fail-open check this file already says was removed.
+A document repeating a mechanism that was deleted for being unsafe is how it gets
+rebuilt.
 
 ## Standing practice: prove the test fails first
 Any test written to catch a specific bug must be **shown to go red before the fix is
