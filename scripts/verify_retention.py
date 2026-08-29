@@ -106,8 +106,13 @@ def main() -> int:
     report = delete_media_for_job(job, db, storage)
     check("completion delete refuses a held job", report.outcome is DeleteOutcome.SKIPPED_HOLD,
           str(report.outcome))
+    # Detail reports what was observed, not the failure case: this printed
+    # "held media survives the completion delete -- bytes gone from the bucket
+    # despite the hold" on every green run until 2026-08-29. check() prints the
+    # detail either way, so failure prose here reads as a contradiction exactly
+    # when everything is fine.
     check("held media survives the completion delete", media_present(storage, raw, derived),
-          "bytes gone from the bucket despite the hold")
+          f"media_present={media_present(storage, raw, derived)}")
 
     # The same job, hold released: the delete must actually work, or the check
     # above proves nothing except that the path is broken.

@@ -12,9 +12,18 @@ means something; there is none, and the only scores this system has produced
 come from a hash of the input bytes. These tests pin the reporting contract, not
 a tuned policy.
 
-# FakeDb / in-process only: no live probe covers face geometry end to end yet.
-# The columns land via migration 006; scripts/verify_attribution.py is the probe
-# that would prove they survive a real INSERT, and it does not check them.
+# Live probe: scripts/verify_attribution.py covers the DB half of this against
+# real Postgres and the real router container -- geometry survives INSERT/SELECT
+# with the values written, absent geometry reads back NULL rather than 0, and
+# items_total/item_count are recorded separately so coverage is derivable.
+# `measured: yes` 2026-08-29, including RED: insert_items mutated to write NULL
+# geometry turned exactly the three geometry checks red, and items_total mutated
+# to agg.items_used turned exactly the two coverage checks red while the
+# fully-covered positive control stayed green -- which is why that control
+# cannot stand alone.
+#
+# What no probe covers: face_evidence() itself and the modality floor are
+# in-process only here.
 """
 from __future__ import annotations
 

@@ -234,6 +234,18 @@ than a citation:
 
 `measured: no` — flagged rather than dressed up:
 
+- **Migration 006 (face geometry, `items_total`) works against real Postgres.**
+  `measured: yes` 2026-08-29 — applied by the `migrate` container, then
+  `scripts/verify_attribution.py` inside the stack: geometry survives a real
+  INSERT/SELECT with the values written rather than a default, absent geometry
+  reads back NULL and not 0, and `items_total` records what was extracted while
+  `item_count` records what survived. Shown RED first, both directions and with
+  the container rebuilt between each: dropping the geometry write turned the
+  three geometry checks red and left coverage green; setting
+  `items_total=agg.items_used` turned the two coverage checks red and left
+  geometry green — while the fully-covered positive control passed under that
+  mutation, which is exactly why a thin-coverage case has to sit beside it.
+
 - **`min_confidence=0.3` and `trim_frac=0.1` have never affected a single result.**
   `measured: yes` that they are inert, `measured: no` that the values are right. Across
   378 item rows the lowest confidence ever produced is 0.6, so nothing has ever been

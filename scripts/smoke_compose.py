@@ -152,7 +152,36 @@ def probe_size_cap(storage) -> None:
     check("rejected body left nothing in the bucket", not storage.exists(key))
 
 
+def _load_dotenv() -> None:
+    """Load .env into this process, because the documented command needs it.
+
+    This script runs on the HOST, outside compose, and builds its own S3 client
+    for the out-of-band size-cap probe. compose injects .env into containers; it
+    does nothing for a host process. So README's documented invocation --
+    `cp .env.example .env` then `python scripts/smoke_compose.py` -- died in
+    botocore with `'NoneType' object has no attribute 'access_key'`, an error
+    that names neither .env nor the missing variable. It only ever worked for a
+    shell that already happened to export AWS credentials.
+
+    Existing environment variables win: an operator pointing the probe at a real
+    bucket must not have it silently overridden by a checked-out dev file.
+    """
+    import os
+
+    env_file = pathlib.Path(__file__).resolve().parents[1] / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 def main() -> int:
+    _load_dotenv()
+
     from df.config import settings
     from df.storage import S3Storage
 
@@ -307,22 +336,33 @@ def main() -> int:
     )
 
     # 7. media really is gone from the bucket, not just flagged in Postgres
+    #
+    # The detail reports the OBSERVATION, not the failure case. These two read
+    # "raw upload absent from bucket -- object still present" on a green run
+    # until 2026-08-29, because check() prints its detail on PASS as well as on
+    # FAIL and the string had been written to explain a failure. A probe whose
+    # passing output states the opposite of what happened teaches its reader to
+    # skim it, which costs exactly when someone is scanning for the one real
+    # failure.
+    raw_still_there = storage.exists(f"raw/{job_id}/original")
+    derived_left = storage.list_prefix(f"derived/{job_id}/")
     check(
         "raw upload absent from bucket",
-        not storage.exists(f"raw/{job_id}/original"),
-        "object still present",
+        not raw_still_there,
+        f"exists={raw_still_there}",
     )
     check(
         "working face crops absent from bucket",
-        storage.list_prefix(f"derived/{job_id}/") == [],
-        "derived objects still present",
+        derived_left == [],
+        f"{len(derived_left)} derived object(s) remain",
     )
 
     # 7b. extended retention window: a >80 result must have preserved the crops
     # that drove the score; anything else must have preserved nothing.
     cold = storage.list_prefix(f"cold/{job_id}/")
     if doc.get("band") == "likely_manipulated":
-        check("high band preserved its driving crops", len(cold) > 0, "cold storage empty")
+        check("high band preserved its driving crops", len(cold) > 0,
+              f"{len(cold)} object(s) in cold storage")
         check(
             "extended retention window recorded",
             doc.get("extended_retention_until") is not None,
