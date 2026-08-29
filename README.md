@@ -8,14 +8,23 @@ claims about what is built.** `DECISIONS.md` records the judgement calls made
 during scaffolding. Its two open questions were answered on 2026-08-29 — both
 by recording the inputs to the decision rather than by locking a reduction.
 
-> **The detector is a placeholder.** The default inference backend
-> (`DF_INFERENCE_BACKEND=stub`) is a deterministic hash-based scorer, not a
-> trained model. It exists so the pipeline can be built and tested before
-> weights land. Every stub result reports `is_real_detector=false` and declares
-> `validation=placeholder`, and the API derives its advisory from that declared
-> level — **never** from how the model is named. A name-based check fails open:
-> load a real checkpoint, the id stops containing `stub`, and every caveat
-> disappears at exactly the moment scores start looking believable.
+> **The default detector is a placeholder; real weights are opt-in.** With the
+> default `DF_INFERENCE_BACKEND=stub` the scorer is a deterministic hash, not a
+> trained model: `is_real_detector=false`, `validation=placeholder`.
+>
+> Real weights are wired and verified — the DFDC-winner EfficientNet-B7, loaded
+> via `docker-compose.weights.yml`. **That does not make the output validated.**
+> It reports `validation=research-checkpoint`, calibration is still `T=1.0`, and
+> the score bands have never been measured against this model. A real model's
+> output on unvalidated calibration is *more* dangerous than obvious nonsense,
+> because it looks like a finding.
+>
+> The API derives its advisory from the declared level — **never** from how the
+> model is named. A name-based check fails open: load a real checkpoint, the id
+> stops containing `stub`, and every caveat disappears at exactly the moment
+> scores start looking believable. That is no longer hypothetical — the id is
+> now `face-tf_efficientnet_b7_ns-9db77ab93188`, and the caveat correctly
+> escalated instead of vanishing.
 
 ---
 
@@ -37,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-198 tests, no infrastructure required. The suite covers the two pipeline rules
+206 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -66,6 +75,44 @@ in about a second, instead of after a multi-minute image build.
 
 It does **not** cover container networking, image builds, real presigned URLs,
 or the WebSocket transport. Those need compose.
+
+## Running on real weights
+
+The stub is the default so `docker compose up` works on a machine with no
+weights on disk. To run the real detector:
+
+```bash
+mkdir -p models/weights
+BASE=https://github.com/selimsef/dfdc_deepfake_challenge/releases/download/0.0.1
+curl -L -o models/weights/dfdc_b7_ns_seed111.pth "$BASE/final_111_DeepFakeClassifier_tf_efficientnet_b7_ns_0_36"
+
+docker compose -f docker-compose.yml -f docker-compose.weights.yml up -d --build
+```
+
+254 MiB, no account needed. `models/` is gitignored — weights are never
+committed, and the job row records their sha256 instead.
+
+| | stub (default) | weights overlay |
+|---|---|---|
+| face model | `face-stub-v0` | `face-tf_efficientnet_b7_ns-<sha12>` |
+| face validation | `placeholder` | `research-checkpoint` |
+| audio model | `audio-stub-v0` | `audio-stub-v0` (unchanged) |
+| audio validation | `placeholder` | `placeholder` |
+
+**Audio does not switch.** The chosen checkpoint is a *face* model; there is no
+audio checkpoint under that decision, so `get_audio_model()` falls back to the
+stub and logs it rather than loading a face architecture for spectrograms. That
+mixed state is deliberate and it fails closed — the stub carries the strongest
+caveat.
+
+**The overlay proves plumbing and provenance, not accuracy.** The CPU worker
+stays on the stub extractor, so the crops are synthetic; a real model scoring
+synthetic input returns a real number with no detection meaning. Treat scores
+from this configuration as evidence that the wiring works, never as findings.
+
+**Licence.** The upstream code is MIT. The weights are trained on Meta's DFDC
+dataset, whose terms are unpublished and whose flow-through to derived weights
+is unsettled. Do not ship commercially without legal review.
 
 ## Run the full service
 

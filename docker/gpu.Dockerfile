@@ -18,7 +18,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-      torch==2.5.1 torchvision==0.20.1
+      torch==2.5.1 torchvision==0.20.1 \
+ && pip install --no-cache-dir timm==1.0.11 opencv-python-headless==4.10.0.84
 
 COPY src/ ./src/
 

@@ -158,7 +158,10 @@ it is present.
 
 Verify with `nvidia-smi` inside WSL, then `docker run --gpus all ... nvidia-smi`,
 before wiring the torch backend into compose — not on the day the weights land.
-[`measured: yes` 2026-08-16 on this box: driver 610.43.02, RTX 4060 Laptop, 8 GB.]
+[`measured: yes` 2026-08-16 on this box: driver 610.43.02, RTX 4060 Laptop, 8 GB.
+Re-verified 2026-08-29 — both steps still pass, but the driver has since moved to
+**610.62**. A pinned version in a document decays on its own, with nothing
+touching the repo to trigger a re-read.]
 
 **CORRECTED 2026-08-18.** The old claim was `measured: no (reasoned)` while reading
 exactly like `measured: yes` — the worked example for state 3 below. This file
@@ -355,8 +358,71 @@ named.
 pipeline. The "Cannot claim" list below still forbids the claim; the two-key gate
 makes reaching it a deliberate, attributable act rather than a one-character change.
 
-## Weights: decided, not yet integrated
+## Weights: INTEGRATED 2026-08-29
 Chosen placeholder: the **DFDC-winner EfficientNet** (`selimsef/dfdc_deepfake_challenge`).
+
+**The checkpoint downloads without any account.** An earlier reading of this file
+conflated two things: the DFDC *dataset* is gated behind a Meta account and an
+agreement, but the trained *weights* are a plain GitHub release asset needing no
+credentials. The licence question below is unchanged and still real; the
+availability obstacle was not.
+[254 MiB, sha256 `9db77ab9…`, `measured: yes` 2026-08-29 by downloading it.]
+
+**The previous loader was wrong in four independent ways**, having been written
+from an assumption and never executed. All `measured: yes` by reading the file:
+
+- The encoder is a **timm** model (`tf_efficientnet_b7_ns`), not torchvision.
+  Keys are `encoder.*` / `fc.*`; torchvision uses `features.*` / `classifier.*`.
+  Not one key overlapped, so it would have failed on every parameter.
+- It is **B7** (66,661,404 params, 2560 features), not B0/B4.
+- The file is a **training checkpoint** `{epoch, state_dict, bce_best}` with every
+  key `module.`-prefixed by `nn.DataParallel`; it needs unwrapping and
+  de-prefixing before it loads at all.
+- Input is **380x380**, not 224.
+
+Normalisation is **ImageNet** mean/std, and this one is a trap: timm's own
+`pretrained_cfg` for a `tf_`-prefixed model reports the *Inception* constants, so
+resolving mean/std from the model — the obvious move — silently rescales every
+input and yields a plausible wrong score.
+
+`load_state_dict(strict=True)`: 0 missing, 0 unexpected. Run end to end through
+compose via `docker-compose.weights.yml`: the job row records
+`face-tf_efficientnet_b7_ns-9db77ab93188` and `research-checkpoint`, and the API
+advisory escalated from PLACEHOLDER to RESEARCH CHECKPOINT.
+
+**This is the first time the fail-closed advisory ran against real weights, and
+it held.** The id no longer contains `stub` — the exact condition that made the
+old substring check fail open — and the caveat did not disappear, it changed to
+the correct one.
+
+**Two seam bugs surfaced only on that first real run**, both invisible for the
+life of the project because the stub scorer hashes its input rather than
+decoding it:
+
+- The stub extractors emitted a bare sha256 digest as `data`, which the CPU
+  worker stored under a `.png` key with `content_type="image/png"` — bytes
+  labelled, named and typed as an image that were not an image. Every job
+  dead-lettered on `cv2.imdecode` returning None. The stubs now emit real
+  greyscale PNGs built from stdlib `zlib`/`struct`: still deterministic, no new
+  dependency in the path that exists so tests need no infrastructure.
+- `EfficientNetDetector.predict_batch` documented "CHW float tensors already
+  resized and normalised" while the GPU worker passes encoded bytes, which is
+  what the stub takes. The two backends had incompatible contracts. The torch
+  one now takes bytes and does its own decode / isotropic resize / pad /
+  normalise.
+
+**Audio stays on the stub, and the registry enforces it.** With
+`DF_INFERENCE_BACKEND=torch` and `DF_AUDIO_WEIGHTS` unset, `get_audio_model()`
+falls back to the stub and says so in the log rather than loading a face
+architecture for audio. Verified live: an audio job reports `audio-stub-v0` /
+`placeholder` in the same stack where video reports `research-checkpoint`. The
+fallback is fail-CLOSED — the stub carries the strongest caveat.
+
+**Still true, and unaffected by any of the above: nothing here is validated.**
+The scores this now produces are real model outputs on real weights, which is
+strictly more dangerous than obvious nonsense, because they look like findings.
+Calibration is still `T=1.0`, the bands have still never been measured against
+this model, and `production-validated` remains forbidden.
 
 **Licence caveat, accepted knowingly.** The repository code is MIT (verified). The
 *weights* are trained on Meta's DFDC dataset, whose terms are not published on the

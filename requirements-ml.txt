@@ -5,5 +5,11 @@
 -r requirements.txt
 torch==2.5.1
 torchvision==0.20.1
+# The DFDC-winner checkpoint's encoder is a timm model (tf_efficientnet_b7_ns),
+# not a torchvision one. `measured: yes` 2026-08-29 by reading the checkpoint:
+# its keys are module.encoder.{conv_stem,bn1,blocks.0-6,bn2,classifier} plus
+# module.fc, and torchvision's EfficientNet uses features.*/classifier.* -- the
+# two do not overlap at all. See src/df/inference/efficientnet.py.
+timm==1.0.11
 opencv-python-headless==4.10.0.84
 librosa==0.10.2.post1

@@ -372,6 +372,70 @@ REPORTING_MUTATIONS = [
 ]
 
 
+# --- the torch-backend seam -------------------------------------------------
+#
+# Both of these shipped broken and were invisible until a real checkpoint ran:
+# the stub extractors emitted a sha256 digest labelled image/png, and the
+# published checkpoint needs unwrapping plus de-prefixing before it loads.
+
+STUB_PNG_WITNESS = (
+    "from df.pipelines.extract import _stub_png;"
+    "a = _stub_png(b'one'); b = _stub_png(b'two');"
+    "print(len(a), a[:8] == bytes([137,80,78,71,13,10,26,10]), a == b)"
+)
+
+STATE_DICT_WITNESS = (
+    "from df.inference.efficientnet import _state_dict_from;"
+    "ck = {'epoch': 37, 'state_dict': {'module.fc.weight': 1,"
+    "                                  'encoder.module.block.weight': 2}};"
+    "print(sorted(_state_dict_from(ck).items()));"
+    "print(sorted(_state_dict_from({'fc.weight': 9}).items()))"
+)
+
+WEIGHTS_MUTATIONS = [
+    Mutation(
+        # Back to the shape that dead-lettered every job the moment a detector
+        # that decodes its input was wired in.
+        label="stub extractors emit a bare digest again",
+        file="src/df/pipelines/extract.py",
+        old="    stream = bytearray()\n    seed = payload",
+        new="    return hashlib.sha256(payload).digest()\n"
+            "    stream = bytearray()\n    seed = payload",
+        witness=STUB_PNG_WITNESS,
+        test="tests/test_weights_loading.py",
+    ),
+    Mutation(
+        # A constant image is still deterministic, and would make every job
+        # score identically -- which is why the determinism check needs its
+        # differs-by-input sibling.
+        label="stub png ignores its input (constant image)",
+        file="src/df/pipelines/extract.py",
+        old="    seed = payload\n",
+        new="    seed = b'constant'\n",
+        witness=STUB_PNG_WITNESS,
+        test="tests/test_weights_loading.py",
+    ),
+    Mutation(
+        label="checkpoint wrapper is not unwrapped",
+        file="src/df/inference/efficientnet.py",
+        old='    if isinstance(sd, dict) and "state_dict" in sd:\n        sd = sd["state_dict"]',
+        new='    if False:\n        sd = sd["state_dict"]',
+        witness=STATE_DICT_WITNESS,
+        test="tests/test_weights_loading.py",
+    ),
+    Mutation(
+        # The subtler one: strip `module.` anywhere instead of only at the
+        # front, corrupting a legitimate nested key.
+        label="module prefix stripped anywhere, not just leading",
+        file="src/df/inference/efficientnet.py",
+        old='        (k[len("module."):] if k.startswith("module.") else k): v',
+        new='        k.replace("module.", ""): v',
+        witness=STATE_DICT_WITNESS,
+        test="tests/test_weights_loading.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
 
@@ -389,3 +453,7 @@ if __name__ == "__main__":
     print("\nreporting suite (coverage, per-face evidence)")
     rep_bad = run_all(REPORTING_MUTATIONS)
     print(f"  {len(REPORTING_MUTATIONS)} mutation(s), {rep_bad} did not produce RED")
+
+    print("\ntorch-backend seam (stub PNGs, checkpoint key rewriting)")
+    w_bad = run_all(WEIGHTS_MUTATIONS)
+    print(f"  {len(WEIGHTS_MUTATIONS)} mutation(s), {w_bad} did not produce RED")

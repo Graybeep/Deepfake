@@ -65,6 +65,60 @@ def _det(data: bytes, salt: bytes, mod: int) -> int:
     return int.from_bytes(hashlib.sha256(salt + data).digest()[:4], "big") % mod
 
 
+def _stub_png(payload: bytes, size: int = 64) -> bytes:
+    """A real, decodable PNG whose pixels are derived deterministically from
+    `payload`.
+
+    These stubs used to emit a bare 32-byte sha256 digest as `data`. The CPU
+    worker then stored it under a `.png` key with `content_type="image/png"` --
+    so the bytes were labelled as an image, named as an image, and were not an
+    image. Nothing noticed for the life of the project because the only consumer
+    was the stub scorer, which hashes the bytes rather than decoding them.
+
+    It surfaced the first time a real detector ran: `cv2.imdecode` returned None
+    and every job dead-lettered with "could not decode item bytes as an image".
+    That is the seam this file's `Frame.data` docstring already described
+    ("encoded still (PNG/JPEG bytes)"), so the contract was right and the stub
+    was violating it.
+
+    Determinism is preserved -- the same input still produces the same bytes and
+    therefore the same stub score -- and no dependency is added: an 8-bit
+    greyscale PNG is a signature plus three chunks, and zlib/struct are stdlib.
+    Doing this with numpy or cv2 would put a heavy import in the path that exists
+    precisely so tests need no infrastructure.
+    """
+    import struct
+    import zlib
+
+    stream = bytearray()
+    seed = payload
+    while len(stream) < size * size:
+        seed = hashlib.sha256(seed).digest()
+        stream.extend(seed)
+    pixels = bytes(stream[: size * size])
+    # Each scanline is prefixed with filter type 0 (None).
+    raw = b"".join(
+        b"\x00" + pixels[row * size : (row + 1) * size] for row in range(size)
+    )
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        bytes([137, 80, 78, 71, 13, 10, 26, 10])  # PNG signature
+        # width, height, bit depth 8, colour type 0 (greyscale), default
+        # compression/filter/interlace.
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 6))
+        + chunk(b"IEND", b"")
+    )
+
+
 class StubFrameSampler:
     """Emits a fixed number of synthetic frames derived from the input bytes."""
 
@@ -74,7 +128,11 @@ class StubFrameSampler:
     def sample(self, video_bytes: bytes) -> list[Frame]:
         fps = settings.video_fps_sample or 1.0
         return [
-            Frame(index=i, data=hashlib.sha256(video_bytes + bytes([i])).digest(), timestamp_s=i / fps)
+            Frame(
+                index=i,
+                data=_stub_png(hashlib.sha256(video_bytes + bytes([i])).digest()),
+                timestamp_s=i / fps,
+            )
             for i in range(self.n_frames)
         ]
 
@@ -95,7 +153,7 @@ class StubFaceExtractor:
             FaceCrop(
                 frame_index=frame_index,
                 face_index=i,
-                data=hashlib.sha256(image_bytes + b"face" + bytes([i])).digest(),
+                data=_stub_png(hashlib.sha256(image_bytes + b"face" + bytes([i])).digest()),
                 confidence=0.6 + 0.1 * (i % 3),
             )
             for i in range(n)
@@ -111,7 +169,9 @@ class StubAudioChunker:
         return [
             AudioChunk(
                 index=i,
-                spectrogram=hashlib.sha256(audio_bytes + b"chunk" + bytes([i])).digest(),
+                spectrogram=_stub_png(
+                    hashlib.sha256(audio_bytes + b"chunk" + bytes([i])).digest()
+                ),
                 start_s=i * dur,
                 duration_s=dur,
             )

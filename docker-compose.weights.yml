@@ -1,0 +1,49 @@
+# Real-weights overlay: run the GPU worker on the DFDC-winner checkpoint.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.weights.yml up -d
+#
+# Kept out of the base file for the same reason GPU passthrough is: `docker
+# compose up` must keep working on a machine with no weights on disk, and the
+# stub backend is the honest default when none are present.
+#
+# WHAT THIS DOES AND DOES NOT PROVE
+#
+# It switches the GPU worker only. The CPU worker stays on
+# DF_INFERENCE_BACKEND=stub, so face "crops" are still the deterministic
+# synthetic images StubFaceExtractor generates. A real detector scoring
+# synthetic input produces a real number with no detection meaning whatsoever.
+#
+# So this overlay exercises PROVENANCE AND PLUMBING end to end -- the weights
+# load, the model_version_id on the job row is the sha of the real file, the
+# validation level is research-checkpoint rather than placeholder, and the
+# advisory the API attaches changes accordingly. It does NOT demonstrate
+# detection accuracy, and a score produced under it must never be quoted as
+# one. For that, the CPU worker needs DF_INFERENCE_BACKEND=torch as well AND
+# real media containing real faces, neither of which is arranged here.
+#
+# AUDIO IS DELIBERATELY NOT SWITCHED. DF_AUDIO_WEIGHTS is left unset, so
+# get_audio_model() falls back to the stub and audio results keep
+# validation=placeholder. That is the mixed state CLAUDE.md predicts -- video
+# and image at research-checkpoint, audio at placeholder -- and it fails closed:
+# the stub carries the strongest caveat, so nothing is presented as more
+# trustworthy than it is.
+#
+# LICENCE: these weights are trained on Meta's DFDC dataset. The upstream code
+# is MIT; the weights' terms are unsettled. Do not ship commercially without
+# legal review. See CLAUDE.md, "Weights: decided, not yet integrated".
+services:
+  gpu-inference:
+    environment:
+      DF_INFERENCE_BACKEND: torch
+      DF_FACE_WEIGHTS: /models/weights/dfdc_b7_ns_seed111.pth
+      # Left unset on purpose -- see the audio note above. Setting it raises
+      # NotImplementedError rather than guessing an architecture.
+      DF_AUDIO_WEIGHTS: ""
+    volumes:
+      # Read-only: the worker has no reason to write to the weights directory,
+      # and the container already runs read_only with only /tmp writable.
+      - ./models:/models:ro
+    # B7 at 380x380 needs materially more room than the stub scorer. The base
+    # file's 8g stands, but torch also wants somewhere to put kernel caches and
+    # the base file's tmpfs is what provides it (HOME/XDG_CACHE_HOME/TORCH_HOME
+    # all point at /tmp in the image).
