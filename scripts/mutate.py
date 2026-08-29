@@ -29,11 +29,15 @@ imported fresh, and an already-imported module in this process would not be.
 from __future__ import annotations
 
 import pathlib
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+# Bytecode cache for every subprocess this harness starts. Outside the repo
+# tree on purpose: a cache inside it outlives the run and is inherited.
+PYCACHE_DIR = ROOT / ".mutate-pycache"
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ def _run_witness(code: str) -> str:
     proc = subprocess.run(
         [sys.executable, "-c", code],
         cwd=ROOT, capture_output=True, text=True,
-        env={**_env(), "PYTHONPATH": str(ROOT / "src")},
+        env=_isolated_env(),
     )
     return (proc.stdout + proc.stderr).strip()
 
@@ -65,6 +69,60 @@ def _env() -> dict:
     import os
 
     return dict(os.environ)
+
+
+def _isolated_env() -> dict:
+    """Env for a subprocess that must read the source as it is on disk NOW.
+
+    CPython validates a cached .pyc against the source's (mtime_seconds, size).
+    A mutation that preserves file size and is written and restored inside the
+    same filesystem tick produces a .pyc whose header matches the RESTORED
+    source exactly -- so the mutated bytecode is treated as current and reused
+    indefinitely.
+
+    That is not hypothetical and it is not a small bug. It was found here on
+    2026-08-29 by `floors = {"image": 1` -> `{"image": 3`, a one-character,
+    identical-length edit. Afterwards `grep` showed 1 in the source and every
+    fresh interpreter reported 3, until __pycache__ was deleted by hand.
+
+    Two consequences, and the second is the dangerous one:
+      * the harness compared two poisoned witness runs and reported NO-OP for a
+        mutation that genuinely changes behaviour -- a false verdict from the
+        component whose entire job is to stop false verdicts;
+      * pytest afterwards runs against MUTATED bytecode with clean source on
+        disk. A suite that goes green then proves nothing, and one that goes red
+        indicts code that is fine.
+
+    `-B` does not fix this: it stops Python writing .pyc files, not reading the
+    poisoned one that already exists. PYTHONPYCACHEPREFIX does, by sending every
+    cache read and write to a scratch directory this harness controls and
+    empties between runs, and by keeping the repo tree free of caches the next
+    process could inherit.
+
+    `measured: yes` -- the reproduction above, and REPORTING_MUTATIONS keeps the
+    same-length mutation as a permanent regression case: if the harness ever
+    reports NO-OP for it again, the isolation has regressed.
+    """
+    _purge_pycache()
+    return {
+        **_env(),
+        "PYTHONPATH": str(ROOT / "src"),
+        "PYTHONPYCACHEPREFIX": str(PYCACHE_DIR),
+    }
+
+
+def _purge_pycache() -> None:
+    """Empty the scratch cache, and any __pycache__ already in the tree.
+
+    The in-tree sweep matters on the first run after this fix: a cache poisoned
+    by an earlier harness version is still sitting there, and it would be read
+    before the prefix ever takes effect.
+    """
+    shutil.rmtree(PYCACHE_DIR, ignore_errors=True)
+    PYCACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in ROOT.rglob("__pycache__"):
+        if ".venv" not in stale.parts:
+            shutil.rmtree(stale, ignore_errors=True)
 
 
 def run(mutation: Mutation) -> str:
@@ -86,10 +144,19 @@ def run(mutation: Mutation) -> str:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", mutation.test, "-p", "no:warnings", "-q"],
             cwd=ROOT, capture_output=True, text=True,
+            # Same isolation as the witness. Without it pytest can import the
+            # bytecode left behind by a previous mutation instead of the source
+            # it is being pointed at.
+            env=_isolated_env(),
         )
         return Result.RED if proc.returncode else Result.GREEN
     finally:
         target.write_text(original, encoding="utf-8")
+        # The restored file can collide with the mutated file's cache entry on
+        # (mtime_seconds, size). Leaving that behind would hand the next
+        # process -- a later mutation, a plain pytest run, the developer --
+        # bytecode for source that no longer exists anywhere.
+        _purge_pycache()
 
 
 def run_all(mutations: list[Mutation]) -> int:
@@ -221,6 +288,90 @@ DB_MUTATIONS = [
 ]
 
 
+# --- coverage and per-face evidence -----------------------------------------
+#
+# Both are reporting contracts rather than policies, which makes them easy to
+# break silently: a wrong coverage number still looks like a number, and a
+# mis-ranked face list still looks like a list. Two mutations per value where a
+# value is involved, per CLAUDE.md -- dropping the write and writing a wrong
+# constant fail differently, and a check that only proves the field exists
+# cannot see the second.
+
+COVERAGE_WITNESS = (
+    "from df.aggregation import AggregationParams, ScoredItem, aggregate;"
+    "items = [ScoredItem(index=i, score=50.0, confidence=0.9) for i in range(4)]"
+    " + [ScoredItem(index=9+i, score=50.0, confidence=0.1) for i in range(6)];"
+    "r = aggregate(items, AggregationParams.for_media('video'));"
+    "print(r.coverage, r.items_total, r.items_used)"
+)
+
+FLOOR_WITNESS = (
+    "from df.aggregation import AggregationParams as P;"
+    "print(P.for_media('image').min_items_for_score,"
+    "      P.for_media('video').min_items_for_score)"
+)
+
+# More faces than MAX_REPORTED_FACES, deliberately. The first version of this
+# witness used two, so the cap could not affect it and the harness correctly
+# reported NO-OP for a mutation of the cap -- a weak witness, not a weak test.
+EVIDENCE_WITNESS = (
+    "from df.rollup import face_evidence;"
+    "rows = [{'item_index': i, 'face_index': 0, 'score': float(i), 'confidence': 0.8}"
+    "        for i in range(25)];"
+    "ev = face_evidence(rows);"
+    "print(ev['faces_total'], ev['faces_reported'], [f['score'] for f in ev['top_faces']])"
+)
+
+REPORTING_MUTATIONS = [
+    Mutation(
+        # Drop the measurement entirely.
+        label="coverage never reported (always None)",
+        file="src/df/aggregation.py",
+        old="        if not self.items_total:\n            return None",
+        new="        if True:\n            return None",
+        witness=COVERAGE_WITNESS,
+        test="tests/test_coverage_and_evidence.py",
+    ),
+    Mutation(
+        # Report a plausible wrong constant. A test that only checks the field
+        # is present, or is not None, passes this.
+        label="coverage always reports full (1.0)",
+        file="src/df/aggregation.py",
+        old="        return round(self.items_used / self.items_total, 4)",
+        new="        return 1.0",
+        witness=COVERAGE_WITNESS,
+        test="tests/test_coverage_and_evidence.py",
+    ),
+    Mutation(
+        # Revert the modality split: the image floor goes back to the video one.
+        label="image inherits the video floor again",
+        file="src/df/aggregation.py",
+        old='        floors = {"image": 1, "video": 3, "audio": 3}',
+        new='        floors = {"image": 3, "video": 3, "audio": 3}',
+        witness=FLOOR_WITNESS,
+        test="tests/test_coverage_and_evidence.py",
+    ),
+    Mutation(
+        # Rank the wrong way: the face that set the label falls off the cap.
+        label="face evidence ranked ascending",
+        file="src/df/rollup.py",
+        old='    ranked = sorted(faces, key=lambda r: r["score"], reverse=True)',
+        new='    ranked = sorted(faces, key=lambda r: r["score"])',
+        witness=EVIDENCE_WITNESS,
+        test="tests/test_coverage_and_evidence.py",
+    ),
+    Mutation(
+        # Report only what fits the cap, losing "3 of 47".
+        label="faces_total counts only the reported faces",
+        file="src/df/rollup.py",
+        old='        "faces_total": len(faces),',
+        new='        "faces_total": min(len(faces), limit),',
+        witness=EVIDENCE_WITNESS,
+        test="tests/test_coverage_and_evidence.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
 
@@ -234,3 +385,7 @@ if __name__ == "__main__":
     print("\nDB-layer suite")
     db_bad = run_all(DB_MUTATIONS)
     print(f"  {len(DB_MUTATIONS)} mutation(s), {db_bad} did not produce RED")
+
+    print("\nreporting suite (coverage, per-face evidence)")
+    rep_bad = run_all(REPORTING_MUTATIONS)
+    print(f"  {len(REPORTING_MUTATIONS)} mutation(s), {rep_bad} did not produce RED")

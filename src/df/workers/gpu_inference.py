@@ -51,6 +51,12 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                 # drove a flagged score, rather than rebuilding key names by
                 # convention and silently missing when the layout changes.
                 "object_key": item["key"],
+                # Face geometry from preprocessing. Carried through unchanged so
+                # a future per-face bar can be fitted against size buckets
+                # instead of a single global constant -- the feature has to be
+                # recorded now for that to be possible later at all.
+                "face_w": item.get("face_w"),
+                "face_h": item.get("face_h"),
                 # Which weights produced THIS number. The job row's
                 # model_version_id is derived from the rows that survive, not
                 # from this worker's message -- during a rolling deploy the two

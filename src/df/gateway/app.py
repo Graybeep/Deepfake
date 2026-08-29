@@ -26,6 +26,7 @@ from df.inference.base import (
     VALIDATION_PRODUCTION,
     VALIDATION_RESEARCH,
 )
+from df.rollup import face_evidence
 from df.jobstatus import JobStatus, assert_persistence_enabled
 from df.queue import TOPIC_PREPROCESS, Queue, build_queue
 from df.ratelimit import RateLimiter
@@ -207,6 +208,20 @@ def _validation_advisories(job: dict) -> list[str]:
     ]
 
 
+def _coverage(job: dict) -> float | None:
+    """item_count / items_total, or None when either was never measured.
+
+    None is not 0.0 and must not be coerced to it: a pre-006 row never recorded
+    the denominator, and a caller that reads a missing coverage as "no coverage"
+    would treat every historical result as worthless rather than as unmeasured.
+    """
+    total = job.get("items_total")
+    used = job.get("item_count")
+    if not total or used is None:
+        return None
+    return round(used / total, 4)
+
+
 def _public_job(job: dict) -> dict:
     doc = {
         "job_id": str(job["id"]),
@@ -217,6 +232,14 @@ def _public_job(job: dict) -> dict:
         "aggregate_score": job["aggregate_score"],
         "face_count": job["face_count"],
         "item_count": job["item_count"],
+        # What was extracted before confidence drops and trimming, and what
+        # fraction of it survived to produce the score. Reported on EVERY
+        # verdict, at every k: a one-frame verdict and a fifty-frame verdict are
+        # otherwise indistinguishable in this response, and the answer to that
+        # is to mark the difference rather than to withhold the verdict.
+        # NULL means never measured (a row written before migration 006).
+        "items_total": job.get("items_total"),
+        "coverage": _coverage(job),
         "model_version_id": job["model_version_id"],
         "aggregation_method": job["aggregation_method"],
         "aggregation_params": job["aggregation_params"],
@@ -282,6 +305,20 @@ def get_job(job_id: str, request: Request) -> JSONResponse:
         raise HTTPException(404, "job not found")
 
     doc = _public_job(job)
+
+    # Per-face detail behind a rolled-up label. Read from job_items rather than
+    # denormalised onto the job row: those rows ARE the audit trail, they
+    # outlive the media, and a second copy is a second thing that can drift.
+    #
+    # A crowd scene labelled `manipulated` because one background face scored
+    # high is indistinguishable, in a scalar response, from a close-up of a
+    # manipulated subject. This does not change the label -- it reports what the
+    # label was reduced from, so the reduction is no longer the only artifact
+    # and a consumer can apply its own bar. There is deliberately no per-face
+    # threshold here; see df.rollup.face_evidence.
+    if job["media_type"] in {"video", "image"} and job["status"] == "complete":
+        doc["face_evidence"] = face_evidence(_db.get_items(job_id))
+
     if live and live.get("status"):
         # Redis is ahead of Postgres between a transition and its commit.
         doc["live_status"] = live["status"]

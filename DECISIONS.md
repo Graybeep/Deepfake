@@ -62,9 +62,28 @@ Where: `src/df/retention.py`, `src/df/workers/router.py`,
 
 ---
 
-## Open questions — answer these before building further on them
+## Answered 2026-08-29 — and neither was answered as asked
 
-### 3. Worst-case multi-face rollup — confirm the default
+Both of these were put up as a choice between three reductions. Both came back
+with the same objection, which was the right one: **picking between three lossy
+reductions bakes the loss into the contract**, and every downstream consumer
+then inherits it. That is more expensive to undo later than getting the choice
+wrong, because the choice can be revisited and a discarded input cannot.
+
+So neither is locked. What changed instead is that the inputs to the decision
+are now recorded and published, so the policy can be fitted later without a
+schema change or a contract break.
+
+**The blocker underneath both is the same, and it is not a missing decision.**
+There is no labelled validation data in this repository, and the only scores
+this system has ever produced come from `_hash_score` — a SHA-256 of the input
+bytes mapped onto 0–100, explicitly uncorrelated with whether the input was
+manipulated. So there is no score distribution to fit a per-size-bucket
+threshold against, and none to derive a video floor from either. Both questions
+reduce to "we need weights and a labelled held-out set", which is the same
+dependency the calibration work has been blocked on all along.
+
+### 3. Worst-case multi-face rollup — kept as the aggregator, demoted as the label
 
 CLAUDE.md flags this one itself: >1 face rolls up to worst-case severity, "a
 default, not fixed — confirm before anything downstream assumes otherwise."
@@ -75,17 +94,86 @@ driven by a marginal detection is weighted down rather than counted at full
 strength. Individual face scores are still stored in `job_items`.
 
 **Live consequence:** a crowd scene where one background face scores high makes
-the whole video `manipulated`. If that is the wrong trade, the alternative is a
-largest-face or highest-confidence-face rule.
+the whole video `manipulated`.
 
-Where: `src/df/rollup.py`, `src/df/pipelines/video.py`, `src/df/pipelines/image.py`.
+**Resolved by making the reduction non-exclusive rather than by replacing it.**
+Worst-case stays as the aggregator — it is the conservative default and the
+false-positive cost is a review flag, not a deletion. What changed is that it is
+no longer the only artifact: `face_evidence` on a completed video/image result
+reports `faces_total`, how many carry geometry, and the top faces by score with
+frame index, confidence and pixel size. "3 of 47 faces, the highest is 38×41px
+in frame 412" is triageable; "manipulated" is not. The flag was never the
+problem. The uninformative flag was.
 
-### 4. Minimum items before a verdict
+**What is deliberately NOT built: a per-face threshold.** The better rule is a
+bar that varies with face size and quality, fitted so the false-positive rate is
+flat across size buckets rather than flat across scores — plus an N-correction
+(Šidák or similar) on the per-face bar, which removes most crowd false positives
+while preserving worst-case semantics. None of it can be fitted here. Adding an
+invented per-face constant to make the field look finished would bake a *second*
+unvalidated number into the contract while claiming to fix the first.
 
-**Assumed:** fewer than 3 usable items ⇒ `undetermined` rather than a score.
-A verdict off one or two frames is noise. This makes very short clips and
-heavily-occluded video come back undetermined, which will show up as a support
-question. Tunable via `AggregationParams.min_items_for_score`.
+**The prerequisite that was missing, and is now fixed.** Face size was not
+merely un-thresholded, it was *unmeasurable*: `FaceCrop.bbox` has been populated
+by the extractor since the first commit and was dropped on the floor in the CPU
+worker, never entering the manifest or `job_items`. Across every job this system
+has ever run there is no record of how big any face was, so even with labels the
+bucketing feature would have had to be regenerated from scratch. Migration 006
+adds `job_items.face_w` / `face_h` and the workers now carry them through.
+
+Absolute pixels only. Relative-to-frame area is the better feature and remains
+unavailable, because source frame dimensions are not recorded anywhere either —
+flagged rather than approximated, since a threshold fitted against a fabricated
+feature is worse than no threshold.
+
+**Still open, and now cheap to answer once data exists:** the per-bucket
+false-positive numbers. Nothing downstream has to change to adopt them.
+
+Where: `src/df/rollup.py` (`face_evidence`), `migrations/006`,
+`src/df/workers/cpu_preprocess.py`, `src/df/gateway/app.py`,
+`tests/test_coverage_and_evidence.py`.
+
+### 4. Minimum items before a verdict — split by modality, and made non-load-bearing
+
+**Was:** fewer than 3 usable items ⇒ `undetermined`, for every modality.
+
+**Now, and why the gate was the wrong lever:** the objection to a k=1 verdict is
+not that the score is wrong, it is that a one-frame verdict and a fifty-frame
+verdict are indistinguishable in the response. The fix for that is to *mark the
+difference*, not to withhold the verdict. So every result now carries
+`items_total` and `coverage` alongside `item_count`, at every k. Once coverage
+is published the floor stops being the only protection a reader has, and a
+consumer can set its own bar instead of inheriting one this codebase cannot
+defend.
+
+**The floor is now per modality: 1 for image, 3 for video and audio.** This is a
+real distinction, not a concession: an image is a complete observation of its
+subject, while a video frame is one sample from a distribution over frames. A
+rule about sampling variance should not apply to something that was not sampled.
+
+The image path already behaved this way — `aggregate_identity` never consulted
+the floor at all — but it recorded `min_items_for_score: 3` on every image job.
+So the audit row asserted a parameter that had not governed the result, which is
+the row claiming a rule the code did not run. That was the part that was
+actually wrong, and it is fixed.
+
+**3 (video/audio) is an unvalidated placeholder and is now labelled as one** in
+`AggregationParams.min_items_for_score` itself rather than only in a document.
+It was picked as the smallest number that is more than a couple. Deriving it
+means measuring score variance at k=1,2,3,5,10 on validation clips and taking
+the point where it flattens; there are no validation clips and no meaningful
+scores. An honest constant is cheaper to revisit than one that has acquired the
+authority of having been written down.
+
+**What would change this again:** if usable-item filtering turns out to be
+strict enough that sub-threshold media is genuinely unscoreable rather than
+merely noisy — a 2-frame verdict near-random rather than just wide — then
+abstaining is right and the fix belongs upstream in what counts as usable, not
+in this constant.
+
+Where: `src/df/aggregation.py` (`for_media`, `coverage`), `migrations/006`,
+`src/df/workers/router.py`, `src/df/gateway/app.py`,
+`tests/test_coverage_and_evidence.py`.
 
 ---
 

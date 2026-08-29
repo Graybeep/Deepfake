@@ -62,6 +62,7 @@ class FakeDb:
             "aggregation_method": None,
             "aggregation_params": None,
             "item_count": None,
+            "items_total": None,
             "face_count": None,
             "completed_at": None,
         }
@@ -134,6 +135,7 @@ class FakeDb:
         aggregation_method: str,
         aggregation_params: dict,
         item_count: int,
+        items_total: int,
         face_count: int | None,
         items_unattributed: int,
         model_validation: str | None,
@@ -146,6 +148,7 @@ class FakeDb:
             aggregation_method=aggregation_method,
             aggregation_params=aggregation_params,
             item_count=item_count,
+            items_total=items_total,
             face_count=face_count,
             items_unattributed=items_unattributed,
             model_validation=model_validation,

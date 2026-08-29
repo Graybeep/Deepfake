@@ -25,6 +25,20 @@ from df.workers.loop import run_worker
 log = logging.getLogger("df.worker.cpu")
 
 
+
+def _face_size(crop) -> dict:
+    """Width/height from the detector's bbox, or NULLs when it reported none.
+
+    A detector that returns no bbox (the deterministic stub) records NULL rather
+    than a guess: an invented size would be indistinguishable from a measured
+    one in the very column that exists to make the rollup analysable.
+    """
+    if crop.bbox is None:
+        return {"face_w": None, "face_h": None}
+    _x, _y, w, h = crop.bbox
+    return {"face_w": int(w), "face_h": int(h)}
+
+
 def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, status: JobStatus) -> None:
     job_id = msg.payload["job_id"]
     media_type = msg.payload["media_type"]
@@ -52,6 +66,11 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                 manifest.append({
                     "key": key, "item_index": frame.index, "item_kind": "frame",
                     "face_index": crop.face_index, "confidence": crop.confidence,
+                    # Face geometry, carried so the rollup is analysable later.
+                    # This was extracted and then discarded here, which is why
+                    # no job in this system's history records how big any face
+                    # was. See migration 006.
+                    **_face_size(crop),
                 })
 
     elif media_type == "image":
@@ -62,6 +81,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
             manifest.append({
                 "key": key, "item_index": 0, "item_kind": "image",
                 "face_index": crop.face_index, "confidence": crop.confidence,
+                **_face_size(crop),
             })
 
     elif media_type == "audio":
@@ -72,6 +92,8 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
             manifest.append({
                 "key": key, "item_index": chunk.index, "item_kind": "chunk",
                 "face_index": None, "confidence": chunk.confidence,
+                # No face to measure. NULL, not 0 -- see migration 006.
+                "face_w": None, "face_h": None,
             })
     else:
         raise ValueError(f"unknown media_type {media_type!r}")

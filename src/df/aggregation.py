@@ -39,6 +39,16 @@ class AggregationParams:
     min_items_for_trim: int = 5
     # Fewer usable items than this => refuse to score (undetermined) rather than
     # publish a verdict off one or two frames.
+    #
+    # 3 IS AN UNVALIDATED PLACEHOLDER for video and audio. It was picked as the
+    # smallest number that is more than a couple, not derived from anything.
+    # Deriving it means measuring score variance at k=1,2,3,5,10 on validation
+    # clips and taking the point where it flattens; there are no validation
+    # clips, and the only scores this system has ever produced come from a hash
+    # of the input bytes, so no such measurement exists or can exist yet.
+    # Recorded here rather than in a doc because a constant that has quietly
+    # acquired the authority of being written down is harder to revisit than one
+    # that says what it is.
     min_items_for_score: int = 3
 
     def as_dict(self) -> dict:
@@ -48,6 +58,28 @@ class AggregationParams:
             "min_items_for_trim": self.min_items_for_trim,
             "min_items_for_score": self.min_items_for_score,
         }
+
+    @classmethod
+    def for_media(cls, media_type: str, **overrides) -> "AggregationParams":
+        """Per-modality floor. An image is not a sample from anything.
+
+        A rule about sampling variance should not apply to a thing that was not
+        sampled: a video frame is one draw from a distribution over frames, an
+        image is a complete observation of its subject. Requiring 3 items of a
+        single image asks for evidence that cannot exist in principle.
+
+        The image path already behaved this way, by accident rather than
+        decision -- `aggregate_identity` never consulted the floor at all. The
+        harm was in the audit trail: every image job recorded
+        `min_items_for_score: 3` on its row, a parameter that had not governed
+        the result. The row asserted a rule the code did not apply.
+
+        Video and audio keep 3, still unvalidated -- see the field comment.
+        """
+        floors = {"image": 1, "video": 3, "audio": 3}
+        if media_type not in floors:
+            raise ValueError(f"unknown media_type {media_type!r}")
+        return cls(min_items_for_score=floors[media_type], **overrides)
 
 
 @dataclass(frozen=True)
@@ -66,6 +98,25 @@ class AggregationResult:
     # a dispute over a >80 result needs the evidence that made it >80, not a
     # sample of everything that was ever extracted.
     used_items: list[ScoredItem] = field(default_factory=list)
+
+    @property
+    def coverage(self) -> float | None:
+        """Fraction of extracted items that actually produced the score.
+
+        Reported on EVERY verdict, at every k. The objection to scoring off one
+        frame is not that the score is wrong, it is that a one-frame verdict and
+        a fifty-frame verdict are indistinguishable in the response -- so the
+        fix is to mark the difference, not to withhold the verdict.
+
+        Once this is in the response the minimum-items gate stops being the only
+        protection a reader has, and a consumer can set its own bar instead of
+        inheriting one this codebase cannot yet defend.
+
+        NULL/None when nothing was extracted: 0/0 is undefined, not 0.0.
+        """
+        if not self.items_total:
+            return None
+        return round(self.items_used / self.items_total, 4)
 
 
 def aggregate(
@@ -136,8 +187,14 @@ def aggregate_identity(item: ScoredItem, params: AggregationParams | None = None
 
     Still goes through this module so the job row records a method + params and
     the image path is auditable the same way video and audio are.
+
+    Defaults to the image params, not the generic ones. This path never
+    consulted `min_items_for_score` -- correctly, an image has exactly one item
+    by construction -- but it used to record the generic `3` on the job row
+    regardless, so every image result carried a parameter that had not been
+    applied to it. The row now records the floor that actually governed it.
     """
-    params = params or AggregationParams()
+    params = params or AggregationParams.for_media("image")
     if item.confidence < params.min_confidence:
         return AggregationResult(
             None, "identity.v1", params.as_dict(), 1, 0, 1, 0,

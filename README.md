@@ -5,7 +5,8 @@ score-band routing, and retention logic.
 
 **Read `CLAUDE.md` before changing anything touching deletion, retention, or
 claims about what is built.** `DECISIONS.md` records the judgement calls made
-during scaffolding and the two open questions that still need a human answer.
+during scaffolding. Its two open questions were answered on 2026-08-29 — both
+by recording the inputs to the decision rather than by locking a reduction.
 
 > **The detector is a placeholder.** The default inference backend
 > (`DF_INFERENCE_BACKEND=stub`) is a deterministic hash-based scorer, not a
@@ -36,7 +37,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-184 tests, no infrastructure required. The suite covers the two pipeline rules
+198 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -156,6 +157,52 @@ never engaged. They are untuned defaults wearing the appearance of tuned ones,
 and they cannot be tuned until real weights produce a real score and confidence
 distribution.
 
+### Coverage, reported on every verdict
+
+`item_count` is what produced the score; `items_total` is what was extracted
+before confidence drops and trimming; `coverage` is the ratio. All three are on
+the job row and in the API.
+
+Without it a verdict off 1 usable frame of 50 and one off 50 of 50 are the same
+response, which is what forced the minimum-items floor to be the only protection
+a reader had: with no way to say *scored, but barely*, the only way to protect
+the consumer is to refuse to answer. With coverage published, a consumer can set
+its own bar.
+
+The floor is now per modality — **1 for image, 3 for video and audio**. An image
+is a complete observation of its subject; a video frame is one sample from a
+distribution over frames, and a rule about sampling variance should not apply to
+something that was not sampled. The image path already behaved this way by
+accident (`aggregate_identity` never consulted the floor), but recorded
+`min_items_for_score: 3` on every image job — a parameter the code had not
+applied to that result.
+
+**3 is an unvalidated placeholder** for video and audio. Deriving it means
+measuring score variance at k=1,2,3,5,10 on validation clips and taking the
+point where it flattens. There are no validation clips, and every score this
+system has produced comes from a hash of the input bytes.
+
+### Per-face evidence, not just a label
+
+A `>80` crowd scene and a `>80` close-up are the same word. `face_evidence` on a
+completed video/image result reports `faces_total`, how many carry recorded
+geometry, and the top faces by score with frame index, confidence and pixel
+size — so *"the highest is 38×41px in frame 412 of 47 faces"* is one read away.
+
+It does **not** decide anything. There is deliberately no per-face threshold and
+no `flagged` count: a per-face bar needs a false-positive rate measured per size
+bucket, which needs labelled validation data. Inventing one to make the field
+look complete would bake a second unvalidated constant into the contract while
+claiming to fix the first.
+
+Face geometry is new in migration 006 and this is why it was missing: `bbox` had
+been populated by the extractor since the first commit and **dropped on the
+floor in the CPU worker**, so across every job this system has ever run there is
+no record of how big any face was. It was not un-thresholded, it was
+unmeasurable. `face_w`/`face_h` are absolute pixels; relative-to-frame area is
+the better bucketing feature and is still unavailable, because frame dimensions
+are not recorded either.
+
 ### Score bands
 
 Bands apply to the **aggregated** score, never a raw per-item score.
@@ -247,7 +294,7 @@ the condition; only the live probe proves storage honours it.
 ## Layout
 
 ```
-migrations/          ordered SQL, 001-005; 001 creates jobs + hold flag
+migrations/          ordered SQL, 001-006; 001 creates jobs + hold flag
 scripts/             migrate.py, run_local.py, mutate.py,
                      check_docs_current.py, and the live probes:
                      smoke_compose.py, verify_queue.py,

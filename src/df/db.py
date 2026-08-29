@@ -94,8 +94,8 @@ class Db:
                 """
                 INSERT INTO job_items
                     (job_id, item_index, item_kind, face_index, score, confidence,
-                     object_key, model_version_id, model_validation)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     object_key, model_version_id, model_validation, face_w, face_h)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (job_id, item_index, face_index) DO NOTHING
                 """,
                 [
@@ -109,6 +109,8 @@ class Db:
                         i.get("object_key"),
                         i.get("model_version_id"),
                         i.get("model_validation"),
+                        i.get("face_w"),
+                        i.get("face_h"),
                     )
                     for i in items
                 ],
@@ -152,7 +154,8 @@ class Db:
             return c.execute(
                 """
                 SELECT item_index, item_kind, face_index, score, confidence,
-                       object_key, model_version_id, model_validation
+                       object_key, model_version_id, model_validation,
+                       face_w, face_h
                   FROM job_items WHERE job_id = %s ORDER BY item_index, face_index
                 """,
                 (job_id,),
@@ -169,6 +172,7 @@ class Db:
         aggregation_method: str,
         aggregation_params: dict,
         item_count: int,
+        items_total: int,
         face_count: int | None,
         items_unattributed: int,
         model_validation: str | None,
@@ -194,6 +198,7 @@ class Db:
                        aggregation_method = %s,
                        aggregation_params = %s,
                        item_count = %s,
+                       items_total = %s,
                        face_count = %s,
                        items_unattributed = %s,
                        model_validation = %s,
@@ -210,6 +215,7 @@ class Db:
                     aggregation_method,
                     json.dumps(aggregation_params),
                     item_count,
+                    items_total,
                     face_count,
                     items_unattributed,
                     model_validation,

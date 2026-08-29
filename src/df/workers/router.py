@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from df import storage as storage_mod
-from df.aggregation import aggregate, aggregate_identity
+from df.aggregation import AggregationParams, aggregate, aggregate_identity
 from df.bands import ResultClass, ReviewUrgency, route
 from df.db import Db
 from df.jobstatus import JobStatus
@@ -104,18 +104,25 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
             job_id, model_version_id, unattributed, len(rows),
         )
 
+    # The minimum-items floor is per modality: an image is a complete
+    # observation of its subject, a video frame is one sample from a
+    # distribution over frames, and a rule about sampling variance does not
+    # apply to something that was not sampled. The video/audio floor of 3 is an
+    # unvalidated placeholder -- see AggregationParams.min_items_for_score.
+    params = AggregationParams.for_media(media_type)
+
     if media_type == "audio":
         face_count = None
-        agg = aggregate(items)
+        agg = aggregate(items, params)
     else:
         face_count = max_faces
         # 0 faces => undetermined, never a real/fake default.
         if not items:
-            agg = aggregate([])
+            agg = aggregate([], params)
         elif media_type == "image":
-            agg = aggregate_identity(items[0])
+            agg = aggregate_identity(items[0], params)
         else:
-            agg = aggregate(items)
+            agg = aggregate(items, params)
 
     routing = route(agg.score)
 
@@ -128,6 +135,11 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         aggregation_method=agg.method,
         aggregation_params=agg.params,
         item_count=agg.items_used,
+        # What there was to begin with, so a consumer can tell a verdict off 1
+        # usable frame of 50 from one off 50 of 50. Without it the row cannot
+        # express "scored, but barely", which is what forced the floor to be
+        # the only protection a reader had.
+        items_total=agg.items_total,
         face_count=face_count,
         # On the audit row, not only in review_flags. The flag is operational
         # and gets read now; this row is what a dispute reads later, and it

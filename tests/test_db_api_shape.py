@@ -84,7 +84,7 @@ CASES: list[tuple[str, list, dict]] = [
     ("bump_attempts", ["j"], {}),
     ("insert_items", ["j", [{"item_index": 0, "item_kind": "face", "face_index": 0,
                              "score": 12.5, "confidence": 0.9, "object_key": "k",
-                             "model_version_id": "m",
+                             "model_version_id": "m", "face_w": 80, "face_h": 90,
                              "model_validation": "placeholder"}]], {}),
     ("item_model_versions", ["j"], {}),
     ("item_model_validations", ["j"], {}),
@@ -93,7 +93,7 @@ CASES: list[tuple[str, list, dict]] = [
                                  aggregate_score=11.0, model_version_id="m",
                                  aggregation_method="weighted_trimmed_mean.v1",
                                  aggregation_params={"trim_frac": 0.1}, item_count=3,
-                                 face_count=1, items_unattributed=0,
+                                 items_total=4, face_count=1, items_unattributed=0,
                                  model_validation="placeholder")),
     ("flag_for_review", ["j", "uncertain band"], {}),
     ("get_retention_row", ["j"], {}),
@@ -200,5 +200,9 @@ def test_get_items_selects_the_columns_its_callers_read(monkeypatch):
 
     sql = conn._statements()[0]
     for column in ("item_index", "item_kind", "face_index", "score", "confidence",
-                   "object_key", "model_version_id", "model_validation"):
+                   "object_key", "model_version_id", "model_validation",
+                   # Added by migration 006. face_evidence in the API reads
+                   # these; dropping them from the SELECT would silently make
+                   # every face report "no geometry recorded" rather than fail.
+                   "face_w", "face_h"):
         assert column in sql, f"get_items stopped selecting {column}"

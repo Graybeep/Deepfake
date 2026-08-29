@@ -27,8 +27,25 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
 - Face Extraction returning 0 faces → `undetermined` class. Never silently default
   into real/fake.
 - Face Extraction returning >1 face → score each face, roll up to worst-case severity
-  for the video/image-level class. This is a default, not fixed — confirm before
-  anything downstream assumes otherwise.
+  for the video/image-level class. **Confirmed 2026-08-29, and deliberately not
+  locked.** Worst-case stays as the aggregator, but it is no longer the only
+  artifact: `face_evidence` publishes the per-face array (score, confidence,
+  frame, pixel size) behind the label, so a crowd scene is distinguishable from a
+  close-up without changing the label. Choosing between worst-case, largest-face
+  and highest-confidence would have baked a lossy reduction into the contract for
+  every downstream consumer — more expensive to undo than the choice is to make.
+  There is deliberately NO per-face threshold: the right rule varies the bar by
+  face size with a false-positive rate flat across buckets, and that needs
+  labelled data that does not exist. Do not add an invented per-face constant.
+  Face geometry (`face_w`/`face_h`, migration 006) was previously extracted and
+  then discarded in the CPU worker, so no historical job records how big any face
+  was — absolute pixels only, since frame dimensions are still unrecorded.
+- Minimum items before a verdict is **per modality**: 1 for image, 3 for
+  video/audio. An image is a complete observation; a video frame is one sample.
+  3 is an unvalidated placeholder, labelled as one in the code. Every result
+  carries `items_total` and `coverage` so the floor is not the only protection a
+  reader has — `undetermined` should not be doing work that a coverage number
+  does better.
 - Score-band thresholds (<20 / 40–60 / >80) apply to the aggregated score, not a raw
   per-item score. Face model and audio model each get their own calibration pass —
   don't share one curve across both.
@@ -539,3 +556,30 @@ The harness has no check of its own either. A wrapper around this reported
 "16 PASS / 0 FAIL" under a mutation that manually produces 2 FAIL, almost certainly
 execing against a container that had not finished rebuilding. Witness the mutation
 inside the environment the test actually runs in, not just in the source tree.
+
+**Same class, found again 2026-08-29, and this one was inside the harness.**
+`measured: yes`: mutating `floors = {"image": 1` to `{"image": 3` — one character,
+identical byte length — made the harness report NO-OP for a mutation that plainly
+changes behaviour. Afterwards `grep` showed `1` in the source while every fresh
+interpreter reported `3`, until `__pycache__` was deleted by hand.
+
+CPython validates a cached `.pyc` against the source's (mtime **in seconds**,
+size). A mutation that preserves file size, written and then restored inside the
+same one-second tick, leaves a `.pyc` whose header matches the restored file
+exactly — so mutated bytecode is treated as current and reused indefinitely. Two
+consequences, and the second is worse than a wrong verdict: the harness compared
+two poisoned runs and withheld a true RED, and **pytest afterwards runs against
+mutated bytecode with clean source on disk** — green proving nothing, or red
+indicting code that is fine.
+
+`-B` does not fix it: that stops Python *writing* a `.pyc`, not *reading* the
+poisoned one already there. `scripts/mutate.py` now points every subprocess at a
+scratch `PYTHONPYCACHEPREFIX` it empties before each run and after each restore,
+and sweeps stale in-tree `__pycache__` too. The same-length mutation is kept in
+`REPORTING_MUTATIONS` as a permanent regression case: it must report RED, and the
+`[] or [...]` case must still report NO-OP — one of each, because a fix that made
+everything report RED would look identical to success.
+
+The general lesson, which is the third time this file has recorded a version of
+it: **a mutation that changes no bytes of file length is the dangerous one**, and
+"I edited the file and re-ran" is not evidence the edit was executed.

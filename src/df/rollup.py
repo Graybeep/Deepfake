@@ -42,3 +42,60 @@ def rollup_items(rows: list[dict[str, Any]]) -> tuple[list[ScoredItem], int]:
             )
         )
     return items, max_faces
+
+
+# How many per-face rows a result reports. A long video can carry thousands of
+# faces and the response is not the place to stream them; the rows remain in
+# job_items either way, which is the audit trail. Ranked by score, so the faces
+# that could have set the label are the ones that survive the cap.
+MAX_REPORTED_FACES = 10
+
+
+def face_evidence(rows: list[dict[str, Any]], limit: int = MAX_REPORTED_FACES) -> dict:
+    """Per-face detail behind a rolled-up label, as an array rather than a scalar.
+
+    The worst-case rollup is a lossy reduction: N faces become one number and
+    one class, and every downstream consumer inherits that reduction with no way
+    to see what it discarded. "manipulated" is not triageable. "3 faces over 80,
+    the highest is 38x41px in frame 412 of 47 faces total" is triageable in a
+    second, and it is the same information the rollup already had and threw
+    away.
+
+    Reporting this does NOT decide anything. There is deliberately no per-face
+    threshold here and no `flagged` count, because a per-face bar is exactly
+    what this codebase cannot yet justify: it would need a false-positive rate
+    measured per size bucket, which needs labelled validation data and a scorer
+    whose output means something. Inventing a bar to make the field look
+    complete would bake a second unvalidated constant into the contract while
+    claiming to fix the first.
+
+    So this reports observations and lets the consumer set its own bar. When the
+    validation data exists, the threshold policy can change without a schema
+    change, because the schema stopped being a scalar.
+    """
+    faces = [r for r in rows if r.get("face_index") is not None]
+    ranked = sorted(faces, key=lambda r: r["score"], reverse=True)
+    sized = [r for r in faces if r.get("face_w") is not None]
+
+    return {
+        "faces_total": len(faces),
+        "faces_reported": min(len(ranked), limit),
+        # How many of those faces carry a recorded size. Every row written
+        # before migration 006 has none, and so does anything the stub
+        # extractor produced, so a caller must not read a missing face_w as
+        # "small". geometry_available says whether the field means anything at
+        # all for this job; faces_with_geometry says how much of it is covered.
+        "faces_with_geometry": len(sized),
+        "geometry_available": bool(sized),
+        "top_faces": [
+            {
+                "item_index": r["item_index"],
+                "face_index": r["face_index"],
+                "score": r["score"],
+                "confidence": r["confidence"],
+                "face_w": r.get("face_w"),
+                "face_h": r.get("face_h"),
+            }
+            for r in ranked[:limit]
+        ],
+    }
