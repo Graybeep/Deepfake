@@ -311,21 +311,49 @@ this file exists to flag.
 Access gate: HuggingFace, requiring an institutional or company email plus
 evidence of work related to deepfake detection. This project is that work.
 
-### Fallback: the DFDC public test set
+### CHOSEN 2026-08-29: the DFDC validation split
 
-Adds **no new licence category**. CLAUDE.md already accepted the DFDC terms
-knowingly for the weights; the test set is the same licensor and the same
-agreement, so it introduces no risk that has not already been taken and written
-down. It is genuinely held out from the training split the model was fitted on.
+Selected over Deepfake-Eval-2024 because it needs no new licence decision and no
+question answered by a third party. Corrected in the same breath, because the
+first version of this entry was imprecise about which split:
 
-The cost is distributional, not legal: DFDC is paid actors under controlled
-lighting and framing. A temperature fitted there is a launch snapshot for *that*
-distribution, and real uploads do not look like it. Defensible, and it must be
-recorded as what it is.
+**Not the Kaggle `test_videos` folder.** That is 400 videos with **no labels** —
+withholding ground truth is how the leaderboard worked, so there is nothing to
+fit against. The earlier phrasing "the DFDC public test set" pointed at exactly
+the wrong artefact.
 
-Access: accept the Kaggle competition rules.
-`measured: no (source)` <https://www.kaggle.com/c/deepfake-detection-challenge>
-· <https://ai.meta.com/datasets/dfdc/>
+**The official validation split from the AWS portal**: 4,000 clips, 50% fake,
+shipped with `metadata.json` giving REAL/FAKE per clip. The property that makes
+it usable is stronger than clip-disjointness — it uses 214 subjects, **none of
+which appear in the training set**. A different clip of the same actor would leak
+an identity the weights have already seen; subject-disjoint rules that out.
+`measured: no (source)` <https://arxiv.org/abs/2006.07397> ·
+<https://ai.meta.com/datasets/dfdc/>
+
+Note on the licence, since a secondary source claimed otherwise: Meta's dataset
+page and the DFDC paper are **both silent** on licence terms — no licence text,
+no commercial-use statement. That confirms CLAUDE.md's existing characterisation
+("terms are not published on the dataset page") rather than the third-party claim
+that DFDC is "released under a non-commercial license", which is not supported by
+either primary source. The risk is unchanged and already accepted for the
+weights: unpublished terms, flow-through to derived artefacts unsettled.
+
+Access needs an AWS account ID and an IAM user with access keys, through the
+dfdc.ai portal, plus accepting the terms there. **That step needs a human** and
+is the one remaining blocker.
+
+### Rejected as the fallback: Deepfake-Eval-2024 for now
+
+Still the better dataset on distribution, and still the right long-term answer.
+It is not chosen now only because its terms say "evaluation only, not training"
+and fitting a temperature fits a parameter — a question only its authors can
+settle. Revisit if the DFDC route stalls, or once that answer arrives.
+
+**The cost of choosing DFDC instead is distributional, not legal, and it is
+real.** DFDC is paid actors under controlled lighting and framing. A temperature
+fitted there is a launch snapshot for *that* distribution, and real uploads do
+not look like it. `fitted_on` will say so, and it should be read every time the
+number is.
 
 ### Rejected, with reasons and sources
 

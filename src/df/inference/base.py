@@ -58,6 +58,20 @@ class ModelVersion:
 class Prediction:
     score: float        # 0-100, calibrated. Higher = more likely manipulated.
     confidence: float   # 0-1. For faces this is detection/alignment confidence.
+    # Raw pre-sigmoid model output, before any temperature was applied.
+    #
+    # Carried because a temperature can ONLY be fitted from logits: `score` has
+    # already had a sigmoid and a temperature applied, and neither can be undone
+    # without knowing the temperature you are trying to find. Without this field
+    # the calibration set would have to be scored by a second code path, and a
+    # temperature fitted on preprocessing that differs from production is fitted
+    # for a distribution production never sees.
+    #
+    # In-memory only. Deliberately NOT persisted: it is an input to a one-off
+    # fitting run, not part of the audit trail, and a column would invite
+    # re-deriving stored verdicts from it. None for backends with no meaningful
+    # logit -- the stub scores by hashing and has none.
+    logit: float | None = None
 
 
 class Detector(Protocol):

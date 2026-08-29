@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-226 tests, no infrastructure required. The suite covers the two pipeline rules
+233 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -279,6 +279,34 @@ calibrated.
 **Do not invent a temperature.** A fabricated T is worse than 1.0: 1.0 is visibly
 the identity and reads as "nothing applied", while a plausible 1.7 reads as
 measured and nothing in the system could contradict it.
+
+#### The runbook, once the data is on disk
+
+The chosen set is the **DFDC validation split** — 4,000 clips, 50/50, with
+`metadata.json`, and using 214 subjects **none of which appear in the training
+set**. Not the Kaggle `test_videos` folder, which is unlabelled by design.
+Getting it needs an AWS account and accepted terms at the dfdc.ai portal; that
+step needs a person.
+
+```bash
+# 1. score the labelled set with the REAL pipeline, emitting {logit, label}
+docker compose -f docker-compose.yml -f docker-compose.weights.yml     run --rm -v /path/to/dfdc_validation:/data:ro gpu-inference     python scripts/extract_logits.py --dir /data --out /tmp/heldout.jsonl
+
+# 2. fit
+python scripts/fit_calibration.py --scores /tmp/heldout.jsonl --model face     --describe "DFDC validation split, 4000 clips"
+
+# 3. paste the printed Temperature(...) into src/df/inference/calibration.py
+```
+
+`extract_logits.py` reuses the production sampler, extractor and detector rather
+than reimplementing them: a temperature is only valid for the distribution it was
+fitted on, and preprocessing is part of that distribution.
+
+Two limits to carry with any temperature this produces. It fits **per face crop**,
+which is the level `Temperature.apply` acts on — but the bands apply to the
+*aggregated* score, and a weighted trimmed mean of calibrated probabilities is not
+itself guaranteed calibrated. And DFDC is paid actors under controlled lighting,
+so the fit describes that distribution, not real uploads.
 
 `calibration` is now on the job row, the item rows, and the API. It has to be
 per-item and rolled up like `model_version_id`, because `model_version_id` is

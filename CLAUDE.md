@@ -113,15 +113,25 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   `scripts/fit_calibration.py` runs it the day that changes. It is verified only
   against synthetic data whose true T is known by construction — that tests the
   optimiser and says nothing about any real model.
-  **Candidate sets surveyed 2026-08-29 — see DECISIONS.md §5 for the full
-  assessment with sources.** Recommended: **Deepfake-Eval-2024** (CC-BY-SA-4.0,
-  in-the-wild 2024, human-labelled, chronologically cannot overlap DFDC), gated
-  on HuggingFace behind an institutional email. **One blocking question first:**
-  its terms say "evaluation only, not training", and fitting a temperature fits
-  a parameter — ask the authors whether post-hoc calibration is permitted before
-  relying on it. Fallback: the DFDC public test set, which adds no new licence
-  category since the DFDC terms are already accepted for the weights, at the cost
-  of calibrating for paid actors under controlled lighting.
+  **Set chosen 2026-08-29: the DFDC validation split** — 4,000 clips, 50/50,
+  `metadata.json` labels, and 214 subjects **none of which are in the training
+  set**. Chosen over Deepfake-Eval-2024 because it needs no new licence decision
+  and no question answered by a third party; DFDC terms are already accepted for
+  the weights. See DECISIONS.md §5 for the full survey with sources.
+  **NOT the Kaggle `test_videos` folder** — 400 videos, unlabelled by design,
+  because withholding ground truth is how the leaderboard worked. The official
+  validation split comes from the AWS/dfdc.ai portal and needs an AWS account
+  plus accepted terms: that step needs a human and is the remaining blocker.
+  The pipeline behind it is built: `scripts/extract_logits.py` scores a labelled
+  directory with the **production** sampler/extractor/detector and emits
+  `{logit, label}` JSONL for `fit_calibration.py`. It reuses production
+  preprocessing deliberately — a temperature is only valid for the distribution
+  it was fitted on, and cropping and resizing are part of that distribution.
+  Two limits to record against whatever T comes out: it fits **per face crop**,
+  which is where `Temperature.apply` acts, while the bands apply to the
+  *aggregated* score and a weighted trimmed mean of calibrated probabilities is
+  not itself guaranteed calibrated; and DFDC is paid actors under controlled
+  lighting, so the fit describes that distribution and not real uploads.
   The eliminating constraint is **not** the licence: a calibration set must be
   held out from the model's training data, so any set with undocumented
   provenance is disqualified outright — overlap with DFDC cannot be ruled out,

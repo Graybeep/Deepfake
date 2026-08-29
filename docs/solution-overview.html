@@ -417,7 +417,7 @@
       <tr><td>Object storage</td><td>MinIO locally, S3 when deployed</td><td>Same upload behaviour in both, so nothing changes between them. MinIO simply drops out of the setup at deploy time.</td></tr>
       <tr><td>Packaging</td><td>Docker and Docker Compose</td><td>One image per service, and the network isolation is written down rather than assumed.</td></tr>
       <tr><td>GPU</td><td>NVIDIA CUDA through WSL2</td><td>Checked on an RTX 4060 with 8 GB before any model code was wired in.</td></tr>
-      <tr><td>Testing</td><td>pytest, plus live checks</td><td>226 automated tests passing, plus scripts that check the running system against a real database, real Redis and a real bucket. The database methods are run against a stand in shaped like the real driver, so a call the driver does not support fails here rather than in production.</td></tr>
+      <tr><td>Testing</td><td>pytest, plus live checks</td><td>233 automated tests passing, plus scripts that check the running system against a real database, real Redis and a real bucket. The database methods are run against a stand in shaped like the real driver, so a call the driver does not support fails here rather than in production.</td></tr>
       <tr><td>Supply chain</td><td>gitleaks</td><td>A secrets scan over the full history. Run on 29 August 2026 across all 30 commits, no findings. This row used to say the scan runs before anything is pushed publicly, which was not true at the time: the scan had never been run and most of the history was already public.</td></tr>
     </tbody>
   </table>

@@ -61,6 +61,10 @@ class StubDetector(Detector):
             # Fixed mid-high confidence: the stub has no real detection quality
             # signal, and pretending otherwise would let confidence weighting in
             # aggregation look meaningful when it isn't.
+            # logit stays None: this score is a hash, not a model output, and
+            # there is no pre-sigmoid value it could honestly report. A
+            # calibration fitted on stub "logits" would be a calibration of a
+            # hash function.
             out.append(Prediction(score=round(score, 4), confidence=0.75))
         return out
 

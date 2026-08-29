@@ -539,6 +539,79 @@ CALIBRATION_MUTATIONS = [
 ]
 
 
+# --- calibration-set extraction ---------------------------------------------
+#
+# This script decides what a temperature gets fitted on, so a silent fault here
+# corrupts the calibration rather than crashing. Recording `score` instead of
+# `logit` is the dangerous one: it produces a full, plausible file and a
+# meaningless fit.
+
+EXTRACT_WITNESS = (
+    "import sys; sys.path.insert(0, 'scripts');"
+    "from extract_logits import rows_for_video;"
+    "from df.inference.base import Prediction;"
+    "from df.pipelines.extract import FaceCrop, Frame;"
+    "S = type('S', (), {'sample': lambda self, b: "
+    "    [Frame(index=i, data=b'f', timestamp_s=0.0) for i in range(6)]})();"
+    # TWO faces per frame, against max_faces=3. With one per frame the
+    # loop's own break already stops at the budget and the slice never
+    # bites, so a cap mutation is genuinely a no-op -- as the harness
+    # correctly reported. Overshooting the budget within a single frame
+    # is the only shape where the slice does work.
+    "E = type('E', (), {'extract': lambda self, b, frame_index=0: "
+    "    [FaceCrop(frame_index=frame_index, face_index=i, data=b'c', confidence=0.7)"
+    "     for i in range(2)]})();"
+    "D = type('D', (), {'predict_batch': lambda self, xs: "
+    "    [Prediction(score=90.0, confidence=1.0, logit=-1.75) for _ in xs]})();"
+    "r = rows_for_video(b'v', 1, 'a.mp4', sampler=S, extractor=E, detector=D, max_faces=3);"
+    "print(len(r), sorted(r[0].keys()), r[0].get('logit'), r[0].get('label'))"
+)
+
+EXTRACT_MUTATIONS = [
+    Mutation(
+        # The quiet catastrophe: write the already-scaled score. The file looks
+        # right, the fit runs, and the temperature it produces means nothing.
+        label="records score instead of logit",
+        file="scripts/extract_logits.py",
+        old='            "logit": pred.logit,',
+        new='            "logit": pred.score,',
+        witness=EXTRACT_WITNESS,
+        test="tests/test_extract_logits.py",
+    ),
+    Mutation(
+        # Drop the per-video cap, letting one long clip dominate the fit.
+        label="face cap ignored",
+        file="scripts/extract_logits.py",
+        old="    crops = crops[:max_faces]",
+        new="    crops = crops[:]",
+        witness=EXTRACT_WITNESS,
+        test="tests/test_extract_logits.py",
+    ),
+    Mutation(
+        # Accept a detector with no logit -- i.e. calibrate on the stub's hash.
+        label="missing logit accepted instead of refused",
+        file="scripts/extract_logits.py",
+        old="        if pred.logit is None:",
+        new="        if False:",
+        witness=(
+            "import sys; sys.path.insert(0, 'scripts');"
+            "from extract_logits import rows_for_video;"
+            "from df.inference.base import Prediction;"
+            "from df.pipelines.extract import FaceCrop, Frame;"
+            "S = type('S', (), {'sample': lambda self, b: "
+            "    [Frame(index=0, data=b'f', timestamp_s=0.0)]})();"
+            "E = type('E', (), {'extract': lambda self, b, frame_index=0: "
+            "    [FaceCrop(frame_index=0, face_index=0, data=b'c', confidence=0.7)]})();"
+            "D = type('D', (), {'predict_batch': lambda self, xs: "
+            "    [Prediction(score=90.0, confidence=1.0) for _ in xs]})();"
+            "print(rows_for_video(b'v', 1, 'a.mp4', sampler=S, extractor=E,"
+            "                     detector=D, max_faces=3))"
+        ),
+        test="tests/test_extract_logits.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
 
@@ -564,3 +637,7 @@ if __name__ == "__main__":
     print("\ncalibration suite (fitter, scheme honesty, advisory)")
     c_bad = run_all(CALIBRATION_MUTATIONS)
     print(f"  {len(CALIBRATION_MUTATIONS)} mutation(s), {c_bad} did not produce RED")
+
+    print("\ncalibration-set extraction")
+    e_bad = run_all(EXTRACT_MUTATIONS)
+    print(f"  {len(EXTRACT_MUTATIONS)} mutation(s), {e_bad} did not produce RED")

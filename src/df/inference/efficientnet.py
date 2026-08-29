@@ -278,7 +278,13 @@ class EfficientNetDetector(Detector):
         return [
             # Confidence is supplied by the face detector / aligner upstream and
             # overwritten by the caller; 1.0 here means "model had no objection".
-            Prediction(score=self._temperature.apply(float(logit)), confidence=1.0)
+            Prediction(
+                score=self._temperature.apply(float(logit)),
+                confidence=1.0,
+                # Kept so a calibration can be fitted from the same code path
+                # that produces production scores.
+                logit=float(logit),
+            )
             for logit in logits.cpu()
         ]
 
