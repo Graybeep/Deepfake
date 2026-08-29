@@ -250,6 +250,121 @@ Per CLAUDE.md these are marked, not half-built:
   network with no route off the host, `read_only`, `cap_drop: ALL`,
   `no-new-privileges`, non-root, pid and memory caps.
 
+## 5. A labelled held-out set for calibration — assessed 2026-08-29
+
+Calibration, the score bands, the per-face size threshold and the video
+minimum-items floor are four open questions with **one** shared dependency: a
+labelled held-out set. This is the survey. Every entry carries its source, per
+CLAUDE.md, and all of it was read on 2026-08-29.
+
+**The structural finding first: there is no ungated, permissively-licensed,
+provenance-documented face-manipulation dataset.** Every option that is usable
+requires a human to accept an agreement. That is not a gap in the search; it is
+the state of the field, and it means this step cannot be automated away.
+
+### The constraint that eliminates most candidates is not the licence
+
+A calibration set must be **held out from the model's training data**. Ours is
+the DFDC-winner B7, trained on DFDC. Fitting a temperature on data the model
+memorised produces a confident-looking, well-calibrated-looking number that is
+wrong in deployment — and unlike a licence problem, nothing downstream would
+ever surface it. So "clean licence, undocumented provenance" is not a
+half-acceptable compromise here, it is disqualifying: if the provenance is
+unknown, overlap with DFDC cannot be ruled out.
+
+This is the same unverifiability argument CLAUDE.md already used to reject the
+Apache-2.0 HuggingFace checkpoints. It is stronger for a calibration set, because
+a leaked calibration set fails silently in the direction of overconfidence.
+
+The second eliminator is **task match**. The model detects face manipulation in
+video frames. A temperature fitted on text-to-image synthetic pictures is fitted
+for a distribution the model was never meant to score.
+
+### Recommended: Deepfake-Eval-2024 — with one blocking question
+
+- Licence **CC-BY-SA-4.0**, which permits commercial use with attribution and
+  share-alike. That alone makes it the only serious candidate found.
+- 44h video, 56.5h audio, 1,975 images. 88 sources, 52 languages, **manually
+  labelled**, covering faceswap, lipsync and diffusion.
+- Collected **in the wild in 2024**, so overlap with DFDC (2019–20 paid actors)
+  is not merely unlikely, it is chronologically impossible. It is also far closer
+  to deployment distribution than any academic set.
+- Purpose-built as an evaluation benchmark, which is exactly what a held-out
+  calibration set should be.
+
+**BLOCKER, and it must be resolved before use, not after.** The terms as
+summarised on the dataset card include *"use only for evaluation purposes, not
+training"*. Temperature scaling fits a parameter on the data — a one-parameter
+logistic regression. Whether post-hoc calibration counts as "training" under
+those terms is genuinely ambiguous, and it is not this repository's call to
+decide. Ask the authors directly; it is one email with a definitive answer, and
+the answer determines whether this option exists at all.
+
+`measured: no (source)`, and note the limitation: the full terms of use sit
+**behind the access gate**, so the clause above is from the public dataset card,
+not from the agreement text. That is precisely the sort of second-hand reading
+this file exists to flag.
+<https://huggingface.co/datasets/nuriachandra/Deepfake-Eval-2024> ·
+<https://github.com/nuriachandra/Deepfake-Eval-2024> ·
+<https://arxiv.org/abs/2503.02857>
+
+Access gate: HuggingFace, requiring an institutional or company email plus
+evidence of work related to deepfake detection. This project is that work.
+
+### Fallback: the DFDC public test set
+
+Adds **no new licence category**. CLAUDE.md already accepted the DFDC terms
+knowingly for the weights; the test set is the same licensor and the same
+agreement, so it introduces no risk that has not already been taken and written
+down. It is genuinely held out from the training split the model was fitted on.
+
+The cost is distributional, not legal: DFDC is paid actors under controlled
+lighting and framing. A temperature fitted there is a launch snapshot for *that*
+distribution, and real uploads do not look like it. Defensible, and it must be
+recorded as what it is.
+
+Access: accept the Kaggle competition rules.
+`measured: no (source)` <https://www.kaggle.com/c/deepfake-detection-challenge>
+· <https://ai.meta.com/datasets/dfdc/>
+
+### Rejected, with reasons and sources
+
+- **Celeb-DF v2** — non-commercial research only, with an explicit undertaking
+  not to "exploit any portion of the videos or any derived data for any
+  purpose". A fitted temperature is derived data. Same blocker as FF++.
+  `measured: no (source)`
+  <https://github.com/yuezunli/celeb-deepfakeforensics>
+- **DF40**, **DeepfakeBench**, **SynthForensics** — all CC BY-NC-4.0.
+  Non-commercial, as CLAUDE.md already recorded for DeepfakeBench.
+  <https://github.com/YZY-stack/DF40> · <https://github.com/SCLBD/DeepfakeBench>
+- **prithivMLmods HuggingFace sets** (`Deepfake-vs-Real-60K` and siblings) —
+  Apache-2.0, and **zero provenance**. The card names two "curated subsets" and
+  never says where the images came from, what generated the fakes, or which
+  datasets they derive from. Overlap with DFDC is unknowable, which is fatal per
+  the section above. Clean licence, unverifiable data — the exact trade CLAUDE.md
+  already refused for checkpoints.
+  <https://huggingface.co/datasets/prithivMLmods/Deepfake-vs-Real-60K>
+- **OpenFake** — fails twice. Subsets from proprietary generators are
+  non-commercial under provider non-compete clauses, and the content is
+  AI-generated imagery broadly (Midjourney, Imagen, Stable Diffusion), not face
+  manipulation. Wrong task.
+  <https://huggingface.co/datasets/ComplexDataLab/OpenFake>
+
+### Building our own was considered and rejected
+
+Swapping faces ourselves over permissively-licensed real images is technically
+possible and produces a worthless calibration: every fake would carry one
+generator's artifacts, so the fitted temperature would describe our own tooling
+rather than the threat. That is a fabricated calibration wearing better clothes
+than a hand-picked constant, not an alternative to a real held-out set.
+
+### What is true whichever is chosen
+
+A temperature is only valid for the distribution it was fitted on. This is
+inherent to a launch snapshot, is already stated in CLAUDE.md, and does not go
+away by picking a better dataset. `fitted_on` records which set it was, and it
+should be read every time the number is.
+
 ## Claims this codebase must not make
 
 Repeated from CLAUDE.md because it is easy to drift on:

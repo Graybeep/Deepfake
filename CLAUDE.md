@@ -113,6 +113,19 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   `scripts/fit_calibration.py` runs it the day that changes. It is verified only
   against synthetic data whose true T is known by construction — that tests the
   optimiser and says nothing about any real model.
+  **Candidate sets surveyed 2026-08-29 — see DECISIONS.md §5 for the full
+  assessment with sources.** Recommended: **Deepfake-Eval-2024** (CC-BY-SA-4.0,
+  in-the-wild 2024, human-labelled, chronologically cannot overlap DFDC), gated
+  on HuggingFace behind an institutional email. **One blocking question first:**
+  its terms say "evaluation only, not training", and fitting a temperature fits
+  a parameter — ask the authors whether post-hoc calibration is permitted before
+  relying on it. Fallback: the DFDC public test set, which adds no new licence
+  category since the DFDC terms are already accepted for the weights, at the cost
+  of calibrating for paid actors under controlled lighting.
+  The eliminating constraint is **not** the licence: a calibration set must be
+  held out from the model's training data, so any set with undocumented
+  provenance is disqualified outright — overlap with DFDC cannot be ruled out,
+  and a leaked calibration set fails silently toward overconfidence.
   **Never invent a T.** A fabricated temperature is worse than 1.0: 1.0 is
   visibly the identity and reads as "nothing applied", while a plausible 1.7
   reads as measured, and nothing in this system could contradict it.
