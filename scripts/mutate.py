@@ -612,6 +612,97 @@ EXTRACT_MUTATIONS = [
 ]
 
 
+# --- the real face extractor ------------------------------------------------
+#
+# This path had no test at all until 2026-08-30, which is how it came to raise
+# on every detected face. The aspect-ratio mutation is the one worth having:
+# squaring the crop does not fail, it silently defeats the detector's
+# isotropic-resize-and-pad and changes what the model sees.
+
+EXTRACT_FACE_WITNESS = (
+    "import numpy as np, cv2;"
+    "from df.pipelines.extract import OpenCVFaceExtractor;"
+    "img = np.random.default_rng(0).integers(0, 255, (300, 400, 3)).astype(np.uint8);"
+    "png = cv2.imencode('.png', img)[1].tobytes();"
+    "C = type('C', (), {'detectMultiScale3': lambda self, *a, **k: "
+    "    (np.array([[10, 20, 120, 60], [200, 40, 50, 50]]), None, np.array([9.0, 0.5]))});"
+    "cv2.CascadeClassifier = lambda *a, **k: C();"
+    "cs = OpenCVFaceExtractor().extract(png);"
+    "print(len(cs), [c.bbox for c in cs], [round(c.confidence, 3) for c in cs],"
+    "      [cv2.imdecode(np.frombuffer(c.data, np.uint8), cv2.IMREAD_COLOR).shape[:2] for c in cs])"
+)
+
+ZERO_ITEM_WITNESS = (
+    # Drives the real router handler with a job that has no item rows and
+    # prints what lands on the audit row. Behavioural, not source-inspecting:
+    # a witness that greps the source would agree with any mutation keeping
+    # the same text, which is the opposite of the point.
+    "import sys; sys.path.insert(0, 'tests');"
+    "from fakes import FakeDb;"
+    "from df.queue import Message;"
+    "from df.storage import InMemoryStorage;"
+    "import df.workers.router as router;"
+    "S = type('S', (), {'publish': lambda self, *a, **k: None})();"
+    "db = FakeDb(); db.add_job('j1', 'video', status='queued');"
+    "router.handle(Message(id='m1', topic='aggregate', payload={"
+    "    'job_id': 'j1', 'media_type': 'video',"
+    "    'model_version_id': 'face-from-the-queue-message'}, attempts=0),"
+    "    db=db, storage=InMemoryStorage(), status=S);"
+    "print(repr(db.jobs['j1']['model_version_id']))"
+)
+
+ZERO_ITEM_MUTATIONS = [
+    Mutation(
+        # The behaviour that shipped: with no rows, take the queue message's
+        # claim and stamp it on an undetermined row where that model never ran.
+        label="zero-item job credited to the queue message model",
+        file="src/df/workers/router.py",
+        old="    if items:",
+        new="    if True:",
+        witness=ZERO_ITEM_WITNESS,
+        test="tests/test_end_to_end.py",
+    ),
+]
+
+FACE_EXTRACT_MUTATIONS = [
+    Mutation(
+        # Back to squaring the crop. Does not raise now that the constant is a
+        # tuple again -- it just quietly destroys the aspect ratio and makes the
+        # detector's careful resize a no-op.
+        label="crop squashed to a square before the detector sees it",
+        file="src/df/pipelines/extract.py",
+        old="            crop = arr[y : y + h, x : x + w]",
+        new="            crop = cv2.resize(arr[y : y + h, x : x + w], (380, 380))",
+        witness=EXTRACT_FACE_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        # Reinstate the extractor-level confidence filter, which drops weak
+        # detections with no row, no count and nothing for a dispute to read.
+        label="low-confidence faces silently dropped again",
+        file="src/df/pipelines/extract.py",
+        old="            crops.append(\n                FaceCrop(",
+        new="            if _haar_confidence(weight) < 0.3:\n                continue\n"
+            "            crops.append(\n                FaceCrop(",
+        witness=EXTRACT_FACE_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        # Unbounded confidence. Aggregation multiplies by this, so a value above
+        # 1 does not fail -- it reweights the mean in favour of one detection.
+        label="haar confidence not clamped to 0-1",
+        file="src/df/pipelines/extract.py",
+        old="    return float(min(1.0, max(0.0, weight / 10.0)))",
+        new="    return float(weight / 10.0)",
+        witness=(
+            "from df.pipelines.extract import _haar_confidence as c;"
+            "print(c(-5.0), c(3.0), c(1000.0))"
+        ),
+        test="tests/test_face_extraction.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
 
@@ -641,3 +732,11 @@ if __name__ == "__main__":
     print("\ncalibration-set extraction")
     e_bad = run_all(EXTRACT_MUTATIONS)
     print(f"  {len(EXTRACT_MUTATIONS)} mutation(s), {e_bad} did not produce RED")
+
+    print("\nreal face extractor")
+    f_bad = run_all(FACE_EXTRACT_MUTATIONS)
+    print(f"  {len(FACE_EXTRACT_MUTATIONS)} mutation(s), {f_bad} did not produce RED")
+
+    print("\nzero-item attribution")
+    z_bad = run_all(ZERO_ITEM_MUTATIONS)
+    print(f"  {len(ZERO_ITEM_MUTATIONS)} mutation(s), {z_bad} did not produce RED")

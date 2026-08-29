@@ -25,7 +25,33 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
 - Aggregation default: weighted/trimmed mean over per-frame or per-chunk scores,
   weighted down by detection/alignment confidence. Never plain mean.
 - Face Extraction returning 0 faces → `undetermined` class. Never silently default
-  into real/fake.
+  into real/fake. **And credit no model for it.** With zero item rows nothing
+  produced the (absent) score, so `model_version_id` is NULL rather than the
+  queue message's claim — that column means "which weights actually produced the
+  scores", and stamping a configured model onto an undetermined row asserted
+  weights that never ran, while `model_validation` and `calibration` correctly
+  stayed NULL beside it. Fixed and verified live 2026-08-30.
+- **The real (OpenCV) extraction path emits crops at NATIVE resolution.** Geometry
+  belongs to the detector, which does the isotropic resize and zero-padded
+  centring that match upstream. The extractor used to resize to the model input
+  size: that crashed outright once `FACE_INPUT_SIZE` became the int `380` (a
+  constant changing type across a module boundary, invisible because the CPU
+  worker runs the stub and no test covered the branch), and even when it worked
+  it destroyed the aspect ratio *before* the careful resize, making that step a
+  no-op. Two resizes, and the wrong one won.
+- **Detection confidence on the real path is uncalibrated and arbitrary.** Haar's
+  reject level is an unbounded cascade score, not a probability; `_haar_confidence`
+  squashes it by dividing by 10. Monotone, bounded, and nothing more — yet it
+  becomes the aggregation weight, which is the one robustness mechanism that
+  actually fires. Every confidence distribution measured in this repo came from
+  the STUB extractor (0.6/0.7/0.8 by construction), so "the weights genuinely
+  differ" has never been observed on the real path, and `min_confidence` has
+  never been tuned against it. Waits on the same labelled set as calibration.
+- The extractor no longer drops low-confidence faces itself. It did, below 0.3,
+  which broke the stated rule that dropped items are "still recorded in
+  job_items -- dropped, not deleted, so the audit trail shows what was ignored":
+  an extraction-time drop leaves no row, no count and nothing for a dispute to
+  read. Aggregation does the dropping, where it is recorded.
 - Face Extraction returning >1 face → score each face, roll up to worst-case severity
   for the video/image-level class. **Confirmed 2026-08-29, and deliberately not
   locked.** Worst-case stays as the aggregator, but it is no longer the only

@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-233 tests, no infrastructure required. The suite covers the two pipeline rules
+241 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -113,6 +113,39 @@ from this configuration as evidence that the wiring works, never as findings.
 **Licence.** The upstream code is MIT. The weights are trained on Meta's DFDC
 dataset, whose terms are unpublished and whose flow-through to derived weights
 is unsettled. Do not ship commercially without legal review.
+
+### Running the whole pipeline for real
+
+The weights overlay switches only the GPU worker, which leaves the CPU worker
+emitting synthetic crops — a real model scoring fake input. To make both halves
+real, add the third overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.weights.yml                -f docker-compose.realpipeline.yml up -d --build
+```
+
+Frames then come from `OpenCVFrameSampler` and faces from the Haar cascade.
+**Expect more `undetermined` results**: Haar misses profile and small faces, and
+0 faces routes to `undetermined` by design rather than guessing.
+
+This still is not accuracy. The detector is a research checkpoint, the
+temperature is unfitted, and Haar has always been documented as a placeholder
+for RetinaFace/SCRFD. It is real components on a real decode path — a
+prerequisite for accuracy work, not a substitute for it.
+
+**The face crop is emitted at native resolution.** Geometry belongs to the
+detector, which does the isotropic resize and zero-padded centring that match
+upstream preprocessing. The extractor used to resize crops to the model input
+size, which both crashed (the constant became an int) and — when it worked —
+destroyed the aspect ratio *before* the careful resize, silently making it a
+no-op.
+
+**Detection confidence is uncalibrated.** Haar's reject level is an unbounded
+internal cascade score, not a probability; it is squashed to 0–1 by dividing by
+10, which is arbitrary and monotone and nothing more. It becomes the aggregation
+weight, so it is load-bearing. Every confidence distribution measured in this
+repo so far came from the *stub* extractor, so "the weights genuinely differ"
+has never been observed on the real path.
 
 ## Run the full service
 

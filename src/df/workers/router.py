@@ -69,7 +69,23 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
             f"job {job_id} has items scored by multiple model versions {observed}; "
             "refusing to attribute one score to one of them"
         )
-    model_version_id = observed[0] if observed else msg.payload["model_version_id"]
+    # NULL when nothing was scored, rather than the queue message's claim.
+    #
+    # A job that extracted no faces has no item rows, so no model produced its
+    # (absent) score. Falling back to the message here wrote a model_version_id
+    # onto an `undetermined` row where that model had never run -- the column
+    # whose documented meaning is "which weights actually produced the scores",
+    # asserting weights that produced nothing. It also left the row internally
+    # inconsistent, naming a model while model_validation and calibration
+    # correctly stayed NULL.
+    #
+    # The rows are the evidence and the queue message is hearsay; with zero rows
+    # there is no evidence, and NULL is the honest record of that. Which model
+    # was configured is still in the inference.complete event for diagnostics.
+    if items:
+        model_version_id = observed[0] if observed else msg.payload["model_version_id"]
+    else:
+        model_version_id = None
 
     # Rows written before migration 003 carry no producer. item_model_versions
     # drops NULLs, so a job straddling that deploy -- some rows recorded, some

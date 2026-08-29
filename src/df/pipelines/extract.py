@@ -225,21 +225,43 @@ class OpenCVFrameSampler:
 
 
 class OpenCVFaceExtractor:
-    """Haar cascade detect + similarity-align to the model input size.
+    """Haar cascade detect, emitting the face crop at its NATIVE resolution.
 
-    Haar is a placeholder for a proper detector (RetinaFace/SCRFD) -- it is
-    fast and dependency-free but misses profile and small faces, which shows up
-    downstream as 0-face `undetermined` results rather than wrong verdicts.
+    Haar is a placeholder for a proper detector (RetinaFace/SCRFD) -- it is fast
+    and dependency-free but misses profile and small faces, which shows up
+    downstream as 0-face `undetermined` results rather than as wrong verdicts.
+
+    THIS DOES NOT RESIZE TO THE MODEL INPUT SIZE, and that is deliberate.
+
+    It used to do `cv2.resize(box, FACE_INPUT_SIZE)`, which caused two problems
+    at once, both found 2026-08-30 the first time this path was exercised:
+
+      * It broke outright. FACE_INPUT_SIZE became the int 380 when the torch
+        backend was rewritten for the B7 checkpoint, and cv2.resize needs a
+        (w, h) sequence, so every detected face raised. Nothing caught it: the
+        CPU worker runs the stub extractor, the weights overlay switches only
+        the GPU worker, and no test covered this branch. A constant changing
+        type across a module boundary, invisible because the path never ran.
+      * More quietly, it was wrong even when it worked. A square resize of a
+        non-square face box destroys the aspect ratio -- and it did so BEFORE
+        the detector's isotropic-resize-and-pad, which was written to match
+        upstream's preprocessing exactly. The careful step was being handed an
+        already-distorted square and became a no-op. Two resizes, and the wrong
+        one won.
+
+    So geometry belongs to the detector, which is the component that knows what
+    its model wants. This one detects and crops; `EfficientNetDetector._to_tensor`
+    does the isotropic resize, the zero-padded centring and the normalisation.
+
+    KNOWN DEVIATION, untuned: upstream crops with a margin around the detected
+    box, and this takes the box exactly. Adding a margin without a labelled set
+    to measure it against would be inventing a number, so it is named here
+    instead of guessed.
     """
-
-    def __init__(self, min_confidence: float = 0.3) -> None:
-        self.min_confidence = min_confidence
 
     def extract(self, image_bytes: bytes, frame_index: int = 0) -> list[FaceCrop]:
         import cv2
         import numpy as np
-
-        from df.inference.efficientnet import FACE_INPUT_SIZE
 
         arr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if arr is None:
@@ -255,12 +277,9 @@ class OpenCVFaceExtractor:
 
         crops: list[FaceCrop] = []
         for face_index, ((x, y, w, h), weight) in enumerate(zip(boxes, weights)):
-            # Haar's reject-level weight is unbounded; squash to 0-1 so it can be
-            # used as an aggregation weight alongside other detectors.
-            confidence = float(min(1.0, max(0.0, weight / 10.0)))
-            if confidence < self.min_confidence:
+            crop = arr[y : y + h, x : x + w]
+            if crop.size == 0:
                 continue
-            crop = cv2.resize(arr[y : y + h, x : x + w], FACE_INPUT_SIZE)
             ok, buf = cv2.imencode(".png", crop)
             if not ok:
                 continue
@@ -269,11 +288,36 @@ class OpenCVFaceExtractor:
                     frame_index=frame_index,
                     face_index=face_index,
                     data=buf.tobytes(),
-                    confidence=confidence,
+                    confidence=_haar_confidence(weight),
                     bbox=(int(x), int(y), int(w), int(h)),
                 )
             )
         return crops
+
+
+def _haar_confidence(weight: float) -> float:
+    """Haar reject-level -> 0-1 aggregation weight. UNCALIBRATED, and arbitrary.
+
+    Be clear about what this number is, because it is load-bearing: it becomes
+    the item's weight in the confidence-weighted mean, and CLAUDE.md notes that
+    the weighting is the one robustness mechanism in aggregation that actually
+    fires.
+
+    `detectMultiScale3`'s reject level is an unbounded internal cascade score.
+    It is NOT a probability, NOT calibrated, and dividing it by 10 is a squash
+    chosen to land typical detections in a usable range -- nothing more. It is
+    monotone in Haar's own confidence, which is the only property relied on.
+
+    Every measurement of the confidence distribution in this repo so far came
+    from the STUB extractor, which emits 0.6/0.7/0.8 by construction. So
+    "the weights genuinely differ" has never been observed on this path, and
+    `min_confidence=0.3` has never been tuned against it. Both wait on the same
+    labelled set the calibration does.
+
+    A real detector (RetinaFace/SCRFD) returns an actual detection probability
+    and would replace this outright.
+    """
+    return float(min(1.0, max(0.0, weight / 10.0)))
 
 
 class LibrosaAudioChunker:

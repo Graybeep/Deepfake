@@ -57,6 +57,28 @@ def collected_test_count() -> int:
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:warnings"],
         cwd=ROOT, capture_output=True, text=True,
     )
+
+    # A COLLECTION ERROR MUST NOT PRODUCE A NUMBER.
+    #
+    # If a test module fails to import, pytest still prints "N tests collected"
+    # for everything else and adds "1 error". Taking that N treats an incomplete
+    # collection as authoritative -- and it fails in the dangerous direction: the
+    # count drops, so a document claiming the LOWER number validates, and the
+    # guard against stale documents goes green because the suite is broken.
+    #
+    # Found 2026-08-30, when the hook ran under a different interpreter that had
+    # pytest but not opencv. tests/test_face_extraction.py failed to import, the
+    # count fell from 241 to 233, and the checker reported that as fact. It
+    # blocked a correct commit that time; the same mechanism would have passed a
+    # stale one.
+    if re.search(r"\d+\s+error", proc.stdout) or "ERROR" in proc.stdout:
+        print("pytest could not collect the whole suite, so the count is not "
+              "trustworthy. Fix collection first -- an incomplete count is worse "
+              "than none, because it silently lowers the bar a document has to "
+              "clear.")
+        print(proc.stdout[-1200:])
+        raise SystemExit(2)
+
     # pytest -q --collect-only prints either a "N tests collected" summary or a
     # per-file "path: N" listing, depending on version. Handle both rather than
     # letting the check quietly stop working after an upgrade -- a broken

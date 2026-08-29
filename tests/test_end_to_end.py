@@ -189,6 +189,16 @@ def test_a_job_with_no_faces_is_undetermined_and_still_cleaned_up(monkeypatch):
     # No usable signal is still a completed job, and its media still goes.
     assert not h.storage.exists(f"raw/{h.job_id}/original")
 
+    # And no model is credited with a score that was never produced. This used
+    # to fall back to the queue message, stamping a model_version_id onto an
+    # undetermined row where that model had never run -- in the column whose
+    # documented meaning is "which weights actually produced the scores". The
+    # row was internally inconsistent too, naming a model while validation and
+    # calibration correctly stayed NULL. Zero rows is zero evidence.
+    assert h.job["model_version_id"] is None
+    assert h.job["model_validation"] is None
+    assert h.job["calibration"] is None
+
 
 def test_undetermined_jobs_are_flagged_for_review(monkeypatch):
     from df.pipelines.extract import StubFaceExtractor

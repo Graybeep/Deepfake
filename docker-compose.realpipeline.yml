@@ -1,0 +1,23 @@
+# Everything real: the CPU worker decodes and detects for real, not just the GPU
+# worker scoring for real.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.weights.yml \
+#                  -f docker-compose.realpipeline.yml up -d --build
+#
+# docker-compose.weights.yml switches the GPU worker only, which leaves the CPU
+# worker emitting StubFaceExtractor's synthetic crops -- a real model scoring
+# synthetic input. This overlay switches the other half, so frames come from
+# OpenCVFrameSampler and faces from the Haar cascade.
+#
+# WHAT THIS STILL DOES NOT GIVE YOU: accuracy. The detector is a research
+# checkpoint, the temperature is unfitted, and the face detector is Haar, which
+# CLAUDE.md has always called a placeholder for RetinaFace/SCRFD. It gives real
+# components on a real decode path, which is a prerequisite for accuracy work
+# rather than a substitute for it.
+#
+# Expect more `undetermined` results than with the stub: Haar misses profile and
+# small faces, and 0 faces routes to undetermined by design rather than guessing.
+services:
+  cpu-preprocess:
+    environment:
+      DF_INFERENCE_BACKEND: torch

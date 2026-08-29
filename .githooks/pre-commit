@@ -16,7 +16,20 @@
 
 set -e
 
-python scripts/check_docs_current.py || {
+# Use the project interpreter, not whatever `python` resolves to.
+#
+# The check counts tests by running pytest under sys.executable, so its answer
+# depends on which interpreter starts it. On 2026-08-30 the hook's bare `python`
+# was a system install with pytest but no opencv: one test module failed to
+# import and the count came back 8 short. That blocked a correct commit, and the
+# same mechanism would have waved through a stale document claiming the lower
+# number.
+PY=python
+for candidate in .venv/Scripts/python.exe .venv/bin/python; do
+    if [ -x "$candidate" ]; then PY="$candidate"; break; fi
+done
+
+"$PY" scripts/check_docs_current.py || {
     echo ""
     echo "pre-commit: a tracked document is stale. Fix it or commit with"
     echo "--no-verify if you genuinely mean to leave it that way."

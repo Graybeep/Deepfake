@@ -2,3 +2,9 @@
 pytest==8.3.4
 pytest-asyncio==0.25.0
 httpx==0.28.1
+# The real (OpenCV) face extractor runs in the CPU-preprocess image, but its
+# tests must run in the ordinary `pytest` invocation. Without this,
+# tests/test_face_extraction.py skips the whole module -- and a silently skipped
+# test is the "stopped checking" failure this repo keeps rediscovering. It is
+# how the extractor came to raise on every detected face with nothing red.
+opencv-python-headless==4.10.0.84
