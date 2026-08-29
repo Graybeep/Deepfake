@@ -436,6 +436,109 @@ WEIGHTS_MUTATIONS = [
 ]
 
 
+# --- calibration ------------------------------------------------------------
+#
+# The fitter has no real data to be checked against, so its only guard is the
+# synthetic recovery test -- which makes mutating it more important, not less.
+# The scheme mutations restore the exact false claim that was shipped: a
+# hardcoded "launch-snapshot" on results where nothing had been fitted.
+
+FIT_WITNESS = (
+    "import math, random;"
+    "from df.inference.calibration import fit_temperature;"
+    "rng = random.Random(42);"
+    "z = [rng.gauss(0.0, 2.5) for _ in range(4000)];"
+    "y = [1 if rng.random() < 1/(1+math.exp(-v)) else 0 for v in z];"
+    "print(round(fit_temperature([v/2.0 for v in z], y, fitted_on='w').value, 3))"
+)
+
+SCHEME_WITNESS = (
+    "from df.inference.calibration import Temperature;"
+    "print(Temperature(1.0, fitted_on='x', fitted=False).scheme,"
+    "      Temperature(1.7, fitted_on='x', fitted=True).scheme,"
+    # The discriminating case, and the whole reason `fitted` is a field: a real
+    # fit that landed on 1.0. Without it the witness cannot see a mutation that
+    # infers fitted-ness from the value, and the harness correctly reports NO-OP.
+    "      Temperature(1.0, fitted_on='x', fitted=True).scheme)"
+)
+
+ADVISORY_CAL_WITNESS = (
+    "from df.gateway.app import _calibration_advisories as a;"
+    "print(a({'model_validation': 'research-checkpoint',"
+    "         'calibration': 'temperature.v1:unfitted'}));"
+    "print(a({'model_validation': 'research-checkpoint'}))"
+)
+
+# Must actually attempt a one-class fit, or removing the guard changes nothing
+# observable and the harness withholds a verdict.
+ONE_CLASS_WITNESS = (
+    # No try/except and no newlines on purpose. The witness captures stderr
+    # as well as stdout, so an uncaught raise IS observable output: unmutated
+    # this prints a ValueError traceback, mutated it prints a number. That is
+    # a cleaner discriminator than a caught exception, and it avoids embedding
+    # newlines in a single-line -c payload.
+    "from df.inference.calibration import fit_temperature;"
+    "print('returned', round(fit_temperature("
+    "[1.0, -2.0, 0.5, 3.0], [1, 1, 1, 1], fitted_on='w').value, 4))"
+)
+
+
+CALIBRATION_MUTATIONS = [
+    Mutation(
+        # The shipped bug: assert a snapshot regardless of whether one happened.
+        label="scheme hardcoded to launch-snapshot again",
+        file="src/df/inference/calibration.py",
+        old="        return SCHEME_LAUNCH_SNAPSHOT if self.fitted else SCHEME_UNFITTED",
+        new="        return SCHEME_LAUNCH_SNAPSHOT",
+        witness=SCHEME_WITNESS,
+        test="tests/test_calibration_fit.py",
+    ),
+    Mutation(
+        # The subtler version: infer "fitted" from the value, which reports a
+        # genuine fit that landed on 1.0 as though it never happened.
+        label="fitted inferred from value != 1.0",
+        file="src/df/inference/calibration.py",
+        old="        return SCHEME_LAUNCH_SNAPSHOT if self.fitted else SCHEME_UNFITTED",
+        new="        return SCHEME_UNFITTED if self.value == 1.0 else SCHEME_LAUNCH_SNAPSHOT",
+        witness=SCHEME_WITNESS,
+        test="tests/test_calibration_fit.py",
+    ),
+    Mutation(
+        # Fit on the wrong axis. T is not convex; the search can settle in the
+        # wrong place, and the returned number still looks like a temperature.
+        label="fitter searches T instead of 1/T",
+        file="src/df/inference/calibration.py",
+        old="    return Temperature(value=1.0 / ((lo + hi) / 2.0), fitted_on=fitted_on, fitted=True)",
+        new="    return Temperature(value=(lo + hi) / 2.0, fitted_on=fitted_on, fitted=True)",
+        witness=FIT_WITNESS,
+        test="tests/test_calibration_fit.py",
+    ),
+    Mutation(
+        # Accept a one-class set. NLL is then minimised at a search bound and
+        # the boundary artefact is returned as a confident fit.
+        label="one-class set accepted rather than refused",
+        file="src/df/inference/calibration.py",
+        old="    if len(set(labels)) < 2:",
+        new="    if False:",
+        witness=ONE_CLASS_WITNESS,
+        test="tests/test_calibration_fit.py",
+    ),
+    Mutation(
+        # Fail open: say nothing when the calibration is unrecorded.
+        label="calibration advisory silent on unknown scheme",
+        file="src/df/gateway/app.py",
+        old='    # NULL, or a scheme this function does not know about. Same rule as the\n'
+            '    # validation advisory: unrecognised provenance warns rather than stays quiet.\n'
+            '    return [',
+        new='    # NULL, or a scheme this function does not know about. Same rule as the\n'
+            '    # validation advisory: unrecognised provenance warns rather than stays quiet.\n'
+            '    return []\n    return [',
+        witness=ADVISORY_CAL_WITNESS,
+        test="tests/test_calibration_fit.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
 
@@ -457,3 +560,7 @@ if __name__ == "__main__":
     print("\ntorch-backend seam (stub PNGs, checkpoint key rewriting)")
     w_bad = run_all(WEIGHTS_MUTATIONS)
     print(f"  {len(WEIGHTS_MUTATIONS)} mutation(s), {w_bad} did not produce RED")
+
+    print("\ncalibration suite (fitter, scheme honesty, advisory)")
+    c_bad = run_all(CALIBRATION_MUTATIONS)
+    print(f"  {len(CALIBRATION_MUTATIONS)} mutation(s), {c_bad} did not produce RED")

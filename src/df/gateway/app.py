@@ -26,6 +26,7 @@ from df.inference.base import (
     VALIDATION_PRODUCTION,
     VALIDATION_RESEARCH,
 )
+from df.inference.calibration import SCHEME_LAUNCH_SNAPSHOT, SCHEME_UNFITTED
 from df.rollup import face_evidence
 from df.jobstatus import JobStatus, assert_persistence_enabled
 from df.queue import TOPIC_PREPROCESS, Queue, build_queue
@@ -165,6 +166,49 @@ def mark_uploaded(job_id: str, request: Request) -> dict:
     return {"job_id": job_id, "status": "queued", "enqueued": True}
 
 
+def _calibration_advisories(job: dict) -> list[str]:
+    """Caveat about the SCALE of the number, not the trustworthiness of the
+    weights. FAILS CLOSED, like its neighbour.
+
+    These are separate questions and both have to be answerable. A
+    research-checkpoint warning says the weights were not validated here; it
+    says nothing about whether the 0-100 figure is a calibrated probability. An
+    unfitted temperature means it is not: the score is a raw sigmoid of a raw
+    logit, so "82" is not "82% likely manipulated" and the score bands were
+    drawn for a scale nothing has been mapped onto.
+
+    Silent for the stub, whose PLACEHOLDER caveat already says the number is
+    meaningless -- adding a second warning about the calibration of a
+    meaningless number is noise that trains readers to skip advisories.
+    """
+    if job.get("model_validation") == VALIDATION_PLACEHOLDER:
+        return []
+
+    calibration = job.get("calibration")
+
+    if calibration == SCHEME_LAUNCH_SNAPSHOT:
+        return [
+            "LAUNCH-SNAPSHOT CALIBRATION: the temperature was fitted once, on a "
+            "held-out set captured at launch. It is not tracked for drift and is "
+            "not re-fitted per retrain."
+        ]
+
+    if calibration == SCHEME_UNFITTED:
+        return [
+            "UNCALIBRATED SCORE: no temperature has been fitted for this model, "
+            "so this number is a raw model output, not a calibrated probability. "
+            "It is not a percentage likelihood, and the score bands were not "
+            "drawn against this scale."
+        ]
+
+    # NULL, or a scheme this function does not know about. Same rule as the
+    # validation advisory: unrecognised provenance warns rather than stays quiet.
+    return [
+        "UNRECORDED CALIBRATION: nothing recorded how this score was calibrated, "
+        "so it cannot be compared with other results or read as a probability."
+    ]
+
+
 def _validation_advisories(job: dict) -> list[str]:
     """Caveats about how far this score can be trusted. FAILS CLOSED.
 
@@ -240,6 +284,9 @@ def _public_job(job: dict) -> dict:
         # NULL means never measured (a row written before migration 006).
         "items_total": job.get("items_total"),
         "coverage": _coverage(job),
+        # How the raw logit became this score. NULL means not recorded
+        # (a pre-007 row), which is not the same as "no calibration".
+        "calibration": job.get("calibration"),
         "model_version_id": job["model_version_id"],
         "aggregation_method": job["aggregation_method"],
         "aggregation_params": job["aggregation_params"],
@@ -277,6 +324,7 @@ def _public_job(job: dict) -> dict:
     # produced this score". When part of the evidence had no recorded producer
     # that is true of most of the job, not all of it, and saying so is cheaper
     # than letting the id imply more than was observed.
+    doc["advisories"].extend(_calibration_advisories(job))
     if job.get("items_unattributed"):
         doc["advisories"].append(
             f"PARTIAL PROVENANCE: {job['items_unattributed']} of this job's "

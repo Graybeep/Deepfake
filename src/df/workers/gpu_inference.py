@@ -66,6 +66,11 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                 # Trust level of the weights that produced THIS number,
                 # carried with it so the caveat cannot drift from the score.
                 "model_validation": detector.version.validation,
+                # How the raw logit became this number. Carried per row
+                # for the same reason the model id is: refitting the
+                # temperature changes the score without changing the
+                # weights hash, so the id alone cannot distinguish them.
+                "calibration": detector.version.calibration,
             })
 
     db.insert_items(job_id, rows)

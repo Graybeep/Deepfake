@@ -85,15 +85,18 @@ CASES: list[tuple[str, list, dict]] = [
     ("insert_items", ["j", [{"item_index": 0, "item_kind": "face", "face_index": 0,
                              "score": 12.5, "confidence": 0.9, "object_key": "k",
                              "model_version_id": "m", "face_w": 80, "face_h": 90,
+                             "calibration": "temperature.v1:unfitted",
                              "model_validation": "placeholder"}]], {}),
     ("item_model_versions", ["j"], {}),
     ("item_model_validations", ["j"], {}),
+    ("item_calibrations", ["j"], {}),
     ("get_items", ["j"], {}),
     ("write_result", ["j"], dict(result_class="authentic", band="likely_authentic",
                                  aggregate_score=11.0, model_version_id="m",
                                  aggregation_method="weighted_trimmed_mean.v1",
                                  aggregation_params={"trim_frac": 0.1}, item_count=3,
                                  items_total=4, face_count=1, items_unattributed=0,
+                                 calibration="temperature.v1:unfitted",
                                  model_validation="placeholder")),
     ("flag_for_review", ["j", "uncertain band"], {}),
     ("get_retention_row", ["j"], {}),
@@ -117,6 +120,7 @@ ROWS: dict[str, list[list[dict]]] = {
     "bump_attempts": [[{"attempts": 2}]],
     "item_model_versions": [[{"model_version_id": "face-efficientnet_b4-abc"}]],
     "item_model_validations": [[{"model_validation": "research-checkpoint"}]],
+    "item_calibrations": [[{"calibration": "temperature.v1:unfitted"}]],
     "get_items": [[{"item_index": 0, "item_kind": "face", "face_index": 0,
                     "score": 9.0, "confidence": 0.9, "object_key": "k",
                     "model_version_id": "m", "model_validation": "placeholder"}]],
@@ -204,5 +208,8 @@ def test_get_items_selects_the_columns_its_callers_read(monkeypatch):
                    # Added by migration 006. face_evidence in the API reads
                    # these; dropping them from the SELECT would silently make
                    # every face report "no geometry recorded" rather than fail.
-                   "face_w", "face_h"):
+                   "face_w", "face_h",
+                   # Migration 007. Dropping this would make every result read
+                   # as "calibration not recorded" instead of failing.
+                   "calibration"):
         assert column in sql, f"get_items stopped selecting {column}"

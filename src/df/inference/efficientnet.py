@@ -59,7 +59,6 @@ from df.inference.base import (
 )
 from df.inference.calibration import (
     AUDIO_TEMPERATURE,
-    CALIBRATION_SCHEME,
     FACE_TEMPERATURE,
     Temperature,
 )
@@ -204,7 +203,10 @@ class EfficientNetDetector(Detector):
             architecture=arch,
             modality=modality,
             weights_sha256=digest,
-            calibration=CALIBRATION_SCHEME,
+            # Derived from whether a fit actually happened, not a constant.
+            # This field previously asserted 'launch-snapshot' on every
+            # result while T was 1.0 and nothing had been fitted.
+            calibration=temperature.scheme,
             is_real_detector=True,
             # Never defaults to production-validated. A checkpoint being
             # loadable says nothing about whether it was validated for this

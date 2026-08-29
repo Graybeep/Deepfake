@@ -92,6 +92,19 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
     # untrusted, never as "fine" -- see _public_job.
     model_validation = validations[0] if validations else None
 
+    # Calibration, derived from the same rows by the same rule. Refusing on a
+    # mixed set matters here even when the model version agrees: model_version_id
+    # is keyed on the weights hash, so a refitted temperature produces a
+    # different score under an identical id. Averaging across two calibrations
+    # would silently blend two scales.
+    calibrations = db.item_calibrations(job_id)
+    if len(calibrations) > 1:
+        raise ValueError(
+            f"job {job_id} has items scored under multiple calibrations "
+            f"{calibrations}; refusing to state one score for two scales"
+        )
+    calibration = calibrations[0] if calibrations else None
+
     unattributed = sum(1 for r in rows if r.get("model_version_id") is None)
     if unattributed and observed:
         db.record_event(job_id, "router.partial_provenance", {
@@ -141,6 +154,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, status: JobSta
         # the only protection a reader had.
         items_total=agg.items_total,
         face_count=face_count,
+        calibration=calibration,
         # On the audit row, not only in review_flags. The flag is operational
         # and gets read now; this row is what a dispute reads later, and it
         # must not claim full attribution when part of the evidence had no

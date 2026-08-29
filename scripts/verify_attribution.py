@@ -50,6 +50,7 @@ def rows_for(
     *,
     confidence: float = 0.9,
     geometry: bool = False,
+    calibration: str = "temperature.v1:unfitted",
 ) -> list[dict]:
     return [
         {
@@ -57,6 +58,7 @@ def rows_for(
             "score": score if score is not None else (10.0 if model.endswith("v1") else 90.0),
             "confidence": confidence, "object_key": f"derived/x/f{i}.png",
             "model_version_id": model,
+            "calibration": calibration,
             # NULL unless asked for, so the absent case is exercised too: a
             # probe that always supplied geometry could not tell "stored" from
             # "defaulted to something".
@@ -274,6 +276,60 @@ def main() -> int:
     check("positive control: a fully covered job reports total == count",
           full_job["items_total"] == 4 and full_job["item_count"] == 4,
           f"{full_job['item_count']}/{full_job['items_total']}")
+
+    # --- 5. migration 007: calibration provenance --------------------------
+    #
+    # model_version_id is keyed on the weights hash alone, so refitting the
+    # temperature changes every score without changing the id. This column is
+    # the only thing that distinguishes two such results, which is exactly why
+    # it has to survive a real INSERT rather than exist only in-process.
+    cal_job = db.create_job(
+        media_type="video", raw_object_key="", derived_prefix="", submitted_by="probe"
+    )
+    db.set_status(cal_job, "queued")
+    db.insert_items(cal_job, rows_for("face-probe-v1", 0, 4, score=5.0))
+
+    observed_cal = db.item_calibrations(cal_job)
+    check("calibration survives a real INSERT and DISTINCT",
+          observed_cal == ["temperature.v1:unfitted"], str(observed_cal))
+
+    queue.push(TOPIC_AGGREGATE, {
+        "job_id": cal_job, "media_type": "video", "model_version_id": "face-probe-v1",
+    })
+    status = wait_for_status(db, cal_job, {"complete", "dead_letter", "failed"})
+    check("the calibration job completes", status == "complete", f"status={status}")
+    check("calibration is rolled up onto the audit row",
+          db.get_job(cal_job)["calibration"] == "temperature.v1:unfitted",
+          repr(db.get_job(cal_job)["calibration"]))
+
+    # A job whose rows were scored under two calibrations must be refused, for
+    # the same reason a mixed-model job is: one score cannot describe two
+    # scales. Same model version on both sides, so this isolates the
+    # calibration check from the model-version one -- if the refusal came from
+    # the model check instead, this would pass for the wrong reason.
+    mixed_cal = db.create_job(
+        media_type="video", raw_object_key="", derived_prefix="", submitted_by="probe"
+    )
+    db.set_status(mixed_cal, "queued")
+    db.insert_items(mixed_cal, rows_for("face-probe-v1", 0, 4, score=5.0))
+    db.insert_items(mixed_cal, rows_for(
+        "face-probe-v1", 4, 8, score=5.0, calibration="temperature.v1:launch-snapshot"))
+
+    check("one model version, two calibrations",
+          db.item_model_versions(mixed_cal) == ["face-probe-v1"]
+          and len(db.item_calibrations(mixed_cal)) == 2,
+          f"models={db.item_model_versions(mixed_cal)} "
+          f"cals={db.item_calibrations(mixed_cal)}")
+
+    queue.push(TOPIC_AGGREGATE, {
+        "job_id": mixed_cal, "media_type": "video", "model_version_id": "face-probe-v1",
+    })
+    status = wait_for_status(db, mixed_cal, {"dead_letter", "complete", "failed"})
+    check("the router refuses a mixed-calibration job", status == "dead_letter",
+          f"status={status}")
+    check("and names the calibration as the cause",
+          "multiple calibrations" in (db.get_job(mixed_cal)["error"] or ""),
+          (db.get_job(mixed_cal)["error"] or "")[:80])
 
     band = straddle_job["band"]
     check(

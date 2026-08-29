@@ -64,6 +64,7 @@ class FakeDb:
             "item_count": None,
             "items_total": None,
             "face_count": None,
+            "calibration": None,
             "completed_at": None,
         }
         self.items[job_id] = []
@@ -98,6 +99,13 @@ class FakeDb:
                 continue
             seen.add(key)
             existing.append(row)
+
+    def item_calibrations(self, job_id: str) -> list[str]:
+        """Mirrors the real DISTINCT query, NULLs dropped."""
+        return sorted({
+            r["calibration"] for r in self.items.get(job_id, [])
+            if r.get("calibration") is not None
+        })
 
     def item_model_validations(self, job_id: str) -> list[str]:
         """Mirrors the real DISTINCT query, NULLs dropped."""
@@ -137,6 +145,7 @@ class FakeDb:
         item_count: int,
         items_total: int,
         face_count: int | None,
+        calibration: str | None,
         items_unattributed: int,
         model_validation: str | None,
     ) -> None:
@@ -150,6 +159,7 @@ class FakeDb:
             item_count=item_count,
             items_total=items_total,
             face_count=face_count,
+            calibration=calibration,
             items_unattributed=items_unattributed,
             model_validation=model_validation,
             status="complete",

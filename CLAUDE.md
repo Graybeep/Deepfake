@@ -103,7 +103,32 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   sign-off before it's relied on for an actual dispute — treat the above as the
   engineering default, not the final word.
 - Calibration: temperature scaling once at launch. Flag as launch-snapshot only, not
-  tied to a recalibration pipeline.
+  tied to a recalibration pipeline. **Status 2026-08-29: the fitter is built and
+  tested; the fit has NOT happened and both temperatures are still `T=1.0`.**
+  Fitting minimises NLL against ground-truth **labels**, and labels cannot be
+  approximated — no labels, no loss surface, nothing to minimise. Weights removed
+  one of the two blockers CLAUDE.md named; the labelled held-out set is the other
+  and is still missing, since every evaluation set assessed for licensing (FF++,
+  DeepfakeBench, DFDC) is gated, non-commercial, or both.
+  `scripts/fit_calibration.py` runs it the day that changes. It is verified only
+  against synthetic data whose true T is known by construction — that tests the
+  optimiser and says nothing about any real model.
+  **Never invent a T.** A fabricated temperature is worse than 1.0: 1.0 is
+  visibly the identity and reads as "nothing applied", while a plausible 1.7
+  reads as measured, and nothing in this system could contradict it.
+- The calibration scheme string is **derived from whether a fit happened**, never
+  hardcoded. It used to be the constant `temperature.v1:launch-snapshot`, stamped
+  onto every torch-backend result while `T=1.0` and `fitted_on` said NOT YET
+  FITTED — the audit trail asserting a snapshot nobody took, in the single field
+  a reader would consult to check. `Temperature.fitted` is an explicit flag and
+  not inferred from `value != 1.0`, because a genuine fit can land on 1.0 and
+  "measured, no correction needed" is a different fact from "never measured".
+- `calibration` is recorded per item row and rolled up by the router, same rule
+  as `model_version_id` (migration 007). It cannot be a job-only column:
+  `model_version_id` is keyed on the weights hash, so refitting the temperature
+  changes every score while leaving the id identical. This column is the only
+  thing that distinguishes those results. A job whose rows carry two calibrations
+  is refused, not averaged across two scales.
 - DLQ: retry-limit + dead-letter + log line. No PagerDuty yet.
 
 ## Tier 3 — deferred, mark clearly, don't half-build
@@ -113,9 +138,11 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
 - AV scanning — network-isolated, locked-down CPU worker containers substitute. Build
   this in the same phase as the CPU preprocessing worker, not later — a worker parsing
   untrusted video/audio before isolation exists is an open compromise window.
-- Per-retrain recalibration and isotonic calibration — still deferred, and NOT because
-  of time. Both need real trained weights and a held-out set, neither of which exists
-  yet. More time does not unblock them; weights do.
+- Per-retrain recalibration and isotonic calibration — still deferred. **Updated
+  2026-08-29: weights now exist, so the reason has narrowed to one thing — a
+  labelled held-out set.** That also blocks the plain launch-snapshot temperature,
+  so nothing about calibration moves until labels do. "More time does not unblock
+  them; weights do" was half right: weights were necessary and are not sufficient.
 - Redis Streams consumer groups — **built 2026-08-16, no longer deferred.** Streams is
   the default backend (`DF_QUEUE_BACKEND=streams`); the list backend is kept as a
   rollback path and both write the same `q:<topic>:dead` list. Any live consumer can

@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-206 tests, no infrastructure required. The suite covers the two pipeline rules
+226 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -250,6 +250,47 @@ unmeasurable. `face_w`/`face_h` are absolute pixels; relative-to-frame area is
 the better bucketing feature and is still unavailable, because frame dimensions
 are not recorded either.
 
+### Calibration: the machinery exists, the fit does not
+
+Temperature scaling turns a raw logit into a calibrated probability. It is fitted
+by minimising negative log-likelihood **against ground-truth labels** on a
+held-out set — labels are not an input that can be approximated, and without them
+there is no loss surface and nothing to minimise.
+
+Real weights landed 2026-08-29 and removed one of the two blockers. **The other
+one stands: there is no labelled held-out set here**, and the public evaluation
+sets already assessed for licensing (FF++, DeepfakeBench, DFDC) are gated,
+non-commercial, or both.
+
+So both temperatures are still `T=1.0`, which is the identity. What exists is the
+fitter, ready to run the day labels do:
+
+```bash
+python scripts/fit_calibration.py --scores held_out.jsonl --model face
+```
+
+It is verified against synthetic data whose true temperature is known by
+construction — distort a calibrated set by a factor of k and the fit must recover
+k. It does, at k = 0.5, 1.0, 1.8 and 3.0, and on a 5000-item demo it recovered
+2.435 against a true 2.4 while cutting ECE from 0.101 to 0.010. **That tests the
+optimiser and nothing else.** It says nothing about whether any real detector is
+calibrated.
+
+**Do not invent a temperature.** A fabricated T is worse than 1.0: 1.0 is visibly
+the identity and reads as "nothing applied", while a plausible 1.7 reads as
+measured and nothing in the system could contradict it.
+
+`calibration` is now on the job row, the item rows, and the API. It has to be
+per-item and rolled up like `model_version_id`, because `model_version_id` is
+keyed on the *weights hash* — refit the temperature and every score changes while
+the id stays identical. This column is the only thing that tells those results
+apart, and a job whose rows carry two calibrations is refused rather than
+averaged across two scales.
+
+Every result from a real model now also carries an **UNCALIBRATED SCORE**
+advisory: the number is a raw model output, not a percentage likelihood, and the
+score bands were not drawn against that scale.
+
 ### Score bands
 
 Bands apply to the **aggregated** score, never a raw per-item score.
@@ -341,7 +382,7 @@ the condition; only the live probe proves storage honours it.
 ## Layout
 
 ```
-migrations/          ordered SQL, 001-006; 001 creates jobs + hold flag
+migrations/          ordered SQL, 001-007; 001 creates jobs + hold flag
 scripts/             migrate.py, run_local.py, mutate.py,
                      check_docs_current.py, and the live probes:
                      smoke_compose.py, verify_queue.py,

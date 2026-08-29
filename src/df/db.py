@@ -94,8 +94,9 @@ class Db:
                 """
                 INSERT INTO job_items
                     (job_id, item_index, item_kind, face_index, score, confidence,
-                     object_key, model_version_id, model_validation, face_w, face_h)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     object_key, model_version_id, model_validation, face_w, face_h,
+                     calibration)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (job_id, item_index, face_index) DO NOTHING
                 """,
                 [
@@ -111,6 +112,7 @@ class Db:
                         i.get("model_validation"),
                         i.get("face_w"),
                         i.get("face_h"),
+                        i.get("calibration"),
                     )
                     for i in items
                 ],
@@ -149,13 +151,31 @@ class Db:
             ).fetchall()
         return [r["model_validation"] for r in rows]
 
+    def item_calibrations(self, job_id: str) -> list[str]:
+        """Calibrations recorded on this job's surviving rows.
+
+        Derived from the rows for the same reason model_version_id is. This one
+        matters even when the model is unchanged: model_version_id is keyed on
+        the weights hash, so refitting the temperature moves the score without
+        moving the id. Two rows scored under different temperatures are not
+        comparable, and this is the only column that shows it.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT calibration FROM job_items "
+                "WHERE job_id = %s AND calibration IS NOT NULL "
+                "ORDER BY calibration",
+                (job_id,),
+            ).fetchall()
+        return [r["calibration"] for r in rows]
+
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         with self.conn() as c:
             return c.execute(
                 """
                 SELECT item_index, item_kind, face_index, score, confidence,
                        object_key, model_version_id, model_validation,
-                       face_w, face_h
+                       face_w, face_h, calibration
                   FROM job_items WHERE job_id = %s ORDER BY item_index, face_index
                 """,
                 (job_id,),
@@ -174,6 +194,7 @@ class Db:
         item_count: int,
         items_total: int,
         face_count: int | None,
+        calibration: str | None,
         items_unattributed: int,
         model_validation: str | None,
     ) -> None:
@@ -202,6 +223,7 @@ class Db:
                        face_count = %s,
                        items_unattributed = %s,
                        model_validation = %s,
+                       calibration = %s,
                        status = 'complete',
                        completed_at = now(),
                        updated_at = now()
@@ -219,6 +241,7 @@ class Db:
                     face_count,
                     items_unattributed,
                     model_validation,
+                    calibration,
                     job_id,
                 ),
             )
