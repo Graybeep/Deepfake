@@ -151,10 +151,86 @@ ADVISORY_MUTATIONS = [
 ]
 
 
+# --- the DB-layer suite -----------------------------------------------------
+#
+# These mutate db.py back into the two shapes that actually shipped broken. Both
+# were invisible to pytest because FakeDb replaces Db wholesale, so no test ever
+# executed a line of it. tests/test_db_api_shape.py runs the real bodies against
+# a psycopg-shaped connection; these mutations are what show it has teeth.
+#
+# No SQL is executed either way -- these prove the API shape and the column
+# list, not that the statements are valid. verify_attribution.py and
+# verify_retention.py remain the only evidence of that.
+
+_SHAPED_CONN = (
+    "import sys; sys.path.insert(0, 'tests');"
+    "import psycopg;"
+    "from psycopg_shape import RecordingConnection;"
+    "from df.db import Db;"
+)
+
+INSERT_ITEMS_WITNESS = (
+    _SHAPED_CONN
+    + "conn = RecordingConnection();"
+    + "psycopg.connect = lambda *a, **k: conn;"
+    + "item = {'item_index': 0, 'item_kind': 'face', 'face_index': 0, 'score': 1.0,"
+      " 'confidence': 0.9, 'object_key': 'k', 'model_version_id': 'm',"
+      " 'model_validation': 'placeholder'};"
+    + "\ntry:\n"
+      "    Db(dsn='postgresql://unused').insert_items('j', [item])\n"
+      "    print('completed', conn._kinds())\n"
+      "except Exception as e:\n"
+      "    print('raised', type(e).__name__, e)\n"
+)
+
+GET_ITEMS_WITNESS = (
+    _SHAPED_CONN
+    + "conn = RecordingConnection(rows=[[]]);"
+    + "psycopg.connect = lambda *a, **k: conn;"
+    + "Db(dsn='postgresql://unused').get_items('j');"
+    + "print(conn._statements()[0])"
+)
+
+DB_MUTATIONS = [
+    Mutation(
+        # The bug that dead-lettered every job against a real database while
+        # the whole suite stayed green. psycopg3 puts executemany on Cursor
+        # only; Connection has execute().
+        label="insert_items calls executemany on a Connection",
+        file="src/df/db.py",
+        old="        with self.conn() as c, c.transaction(), c.cursor() as cur:\n"
+            "            cur.executemany(",
+        new="        with self.conn() as c, c.transaction():\n"
+            "            c.executemany(",
+        witness=INSERT_ITEMS_WITNESS,
+        test="tests/test_db_api_shape.py",
+    ),
+    Mutation(
+        # The second divergence: get_items stopped selecting model_version_id
+        # while FakeDb kept returning it, so attribution read fine in pytest
+        # and came back NULL in Postgres.
+        label="get_items stops selecting model_version_id",
+        file="src/df/db.py",
+        old="                SELECT item_index, item_kind, face_index, score, confidence,\n"
+            "                       object_key, model_version_id, model_validation",
+        new="                SELECT item_index, item_kind, face_index, score, confidence,\n"
+            "                       object_key, model_validation",
+        witness=GET_ITEMS_WITNESS,
+        test="tests/test_db_api_shape.py",
+    ),
+]
+
+
 if __name__ == "__main__":
     print("mutating production source; witness-checked before any verdict\n")
+
+    print("advisory suite")
     bad = run_all(ADVISORY_MUTATIONS)
     print(
-        f"\n{len(ADVISORY_MUTATIONS)} mutation(s), {bad} did not produce RED "
+        f"  {len(ADVISORY_MUTATIONS)} mutation(s), {bad} did not produce RED "
         "(NO-OP is expected for the last one)"
     )
+
+    print("\nDB-layer suite")
+    db_bad = run_all(DB_MUTATIONS)
+    print(f"  {len(DB_MUTATIONS)} mutation(s), {db_bad} did not produce RED")

@@ -388,12 +388,31 @@ tested held and unheld, asserting on the face crops rather than the job row. The
 unheld half earns its place: a test that only checked the held case would also pass
 against a delete path that was simply broken.
 
-Two gaps remain, both about what an in-process suite structurally cannot see:
-- Every test runs against `FakeDb`, which does not mirror psycopg3's
-  Connection/Cursor split. That is precisely how `insert_items` shipped calling
-  `executemany` on a Connection — dead-lettering every job against a real database
-  while the suite stayed green. A passing pytest run is not evidence the DB layer
-  works.
+**The first of the two gaps is now half closed, and the half that remains is the
+larger one.** 2026-08-29: `tests/psycopg_shape.py` provides a psycopg-shaped
+connection and `tests/test_db_api_shape.py` patches `psycopg.connect` so every
+public `Db` method executes its **real body** — which no test had ever done,
+because `FakeDb` replaces `Db` wholesale and so stands in for the layer *above*
+the one that broke. The stand-in has no `executemany` on its Connection and no
+`fetchone`, matching psycopg3.
+
+What makes it more than another fake: its permitted surface is not written down.
+`test_fake_surface_is_a_subset_of_real_psycopg` reads the public names off the
+installed `psycopg.Connection`/`psycopg.Cursor` at runtime and fails if the
+stand-in exposes anything the library does not. A hand-written list would have
+been a fourth divergence — and, per the provenance rule, a state 3 claim about
+psycopg wearing the appearance of a measured one. Both shipped bugs are now
+mutations in `scripts/mutate.py` (`DB_MUTATIONS`) and both report RED,
+witness-checked.
+
+**What it still cannot see, and this is the load-bearing part: no SQL is
+executed.** It proves the API shape and the `get_items` column list. It proves
+nothing about whether a statement is valid, whether a column exists, or whether
+a predicate selects the right rows. `verify_attribution.py`,
+`verify_retention.py` and `smoke_compose.py` remain the only evidence of that,
+and a passing pytest run is still not evidence the DB layer works.
+
+The second gap is untouched:
 - The presigned upload size cap is enforced by object storage.
   `tests/test_presign_policy.py` proves the code still asks for the
   `content-length-range` condition; only `scripts/smoke_compose.py` proves storage

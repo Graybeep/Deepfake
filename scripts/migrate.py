@@ -1,8 +1,12 @@
 """Apply SQL migrations in order. Deliberately not Alembic.
 
-The 5-day budget doesn't have room for a migration framework's own setup, and
-the schema is small enough that plain ordered .sql files are readable by anyone
-reviewing the retention logic. Revisit if the schema starts churning.
+The schema is small enough that plain ordered .sql files are readable by
+anyone reviewing the retention logic, which is the point -- the retention rules
+are the part most likely to be audited. Revisit if the schema starts churning.
+
+(This used to cite the 5-day budget as the first reason. That constraint was
+lifted 2026-08-16; the readability reason is independent of it and still holds,
+so the decision stands on that alone.)
 
 Usage:  python scripts/migrate.py
 """

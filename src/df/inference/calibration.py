@@ -7,7 +7,11 @@ both models have been mapped onto the same scale.
 
 This is a LAUNCH SNAPSHOT. It is not wired to a recalibration pipeline and does
 not track drift, so it must never be described as production-validated
-calibration. Per-retrain recalibration and isotonic regression are week 2+.
+calibration.
+
+Per-retrain recalibration and isotonic regression stay deferred, and NOT for
+scheduling reasons -- both need real trained weights and a held-out set, and
+neither exists yet. More time does not unblock them; weights do.
 """
 from __future__ import annotations
 

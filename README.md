@@ -36,7 +36,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-157 tests, no infrastructure required. The suite covers the two pipeline rules
+184 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -44,6 +44,19 @@ that can touch preserved media**.
 
 `tests/test_retention_ttl.py` asserts against the storage backend, not a mock's
 call log: a mock proves a call was made, not that the bytes are gone.
+
+`tests/test_db_api_shape.py` runs every `Db` method's **real body** against a
+psycopg-shaped connection. Until this existed no test executed a single line of
+`db.py` — `FakeDb` replaces `Db` wholesale, which is how `insert_items` shipped
+calling `executemany` on a Connection (a psycopg3 *cursor* method) and
+dead-lettered every job against a real database while the suite stayed green.
+The stand-in's allowed surface is read off the installed `psycopg` classes at
+runtime rather than hardcoded, so it cannot drift wider than the library the way
+every previous fake did.
+
+**It executes no SQL.** It proves the API shape and that `get_items` still
+selects the columns the router reads. Whether a statement is valid or a
+predicate selects the right rows is still only proven by the live probes.
 
 `tests/test_end_to_end.py` drives the **real worker handlers** (preprocess →
 inference → router) against in-memory Postgres/Redis/S3 stand-ins. It catches
