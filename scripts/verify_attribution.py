@@ -42,13 +42,26 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         failures.append(label)
 
 
-def rows_for(model: str, lo: int, hi: int, score: float | None = None) -> list[dict]:
+def rows_for(
+    model: str,
+    lo: int,
+    hi: int,
+    score: float | None = None,
+    *,
+    confidence: float = 0.9,
+    geometry: bool = False,
+) -> list[dict]:
     return [
         {
             "item_index": i, "item_kind": "frame", "face_index": 0,
             "score": score if score is not None else (10.0 if model.endswith("v1") else 90.0),
-            "confidence": 0.9, "object_key": f"derived/x/f{i}.png",
+            "confidence": confidence, "object_key": f"derived/x/f{i}.png",
             "model_version_id": model,
+            # NULL unless asked for, so the absent case is exercised too: a
+            # probe that always supplied geometry could not tell "stored" from
+            # "defaulted to something".
+            "face_w": (30 + i) if geometry else None,
+            "face_h": (40 + i) if geometry else None,
         }
         for i in range(lo, hi)
     ]
@@ -194,6 +207,73 @@ def main() -> int:
     check("and records a measured zero, not NULL",
           clean_job["items_unattributed"] == 0,
           repr(clean_job["items_unattributed"]))
+
+    # --- 4. migration 006: geometry and coverage against real Postgres -----
+    #
+    # These columns were added and exercised only in-process. pytest runs
+    # against FakeDb, which stores whatever dict it is handed -- it cannot see a
+    # column missing from the INSERT, absent from the SELECT, or rejected by the
+    # real schema. That is exactly how insert_items shipped broken.
+    geo = db.create_job(
+        media_type="video", raw_object_key="", derived_prefix="", submitted_by="probe"
+    )
+    db.set_status(geo, "queued")
+
+    # 4 usable rows carrying geometry, plus 2 that will be dropped below the
+    # confidence floor -- so coverage must come back below 1.0 rather than
+    # defaulting to it.
+    db.insert_items(geo, rows_for("face-probe-v1", 0, 4, score=5.0, geometry=True))
+    db.insert_items(geo, rows_for("face-probe-v1", 4, 6, score=5.0, confidence=0.1))
+
+    stored = db.get_items(geo)
+    sized = [r for r in stored if r.get("face_w") is not None]
+    check("face geometry survives a real INSERT and SELECT", len(sized) == 4,
+          f"{len(sized)}/6 rows carry face_w")
+    check("the stored values are the ones written, not a default",
+          sorted(r["face_w"] for r in sized) == [30, 31, 32, 33],
+          str(sorted(r["face_w"] for r in sized)))
+
+    # The positive control's negative half: rows written without geometry must
+    # read back NULL, not 0. A consumer bucketing by size has to be able to tell
+    # "not recorded" from "small", and 0 would be a measured claim of a
+    # zero-pixel face.
+    unsized = [r for r in stored if r.get("face_w") is None]
+    check("absent geometry reads back NULL, not 0", len(unsized) == 2,
+          f"{len(unsized)} rows with NULL face_w")
+
+    queue.push(TOPIC_AGGREGATE, {
+        "job_id": geo, "media_type": "video", "model_version_id": "face-probe-v1",
+    })
+    status = wait_for_status(db, geo, {"complete", "dead_letter", "failed"})
+    check("the geometry job completes", status == "complete", f"status={status}")
+
+    geo_job = db.get_job(geo)
+    check("items_total records what was extracted, not what survived",
+          geo_job["items_total"] == 6, repr(geo_job["items_total"]))
+    check("item_count records what survived", geo_job["item_count"] == 4,
+          repr(geo_job["item_count"]))
+    check(
+        "so coverage is derivable from the audit row and is NOT 1.0",
+        geo_job["items_total"] and geo_job["item_count"]
+        and round(geo_job["item_count"] / geo_job["items_total"], 4) == 0.6667,
+        f"{geo_job['item_count']}/{geo_job['items_total']}",
+    )
+
+    # A fully covered job in the same setup: without this, every check above
+    # would also pass against a router that always wrote a low coverage.
+    full = db.create_job(
+        media_type="video", raw_object_key="", derived_prefix="", submitted_by="probe"
+    )
+    db.set_status(full, "queued")
+    db.insert_items(full, rows_for("face-probe-v1", 0, 4, score=5.0, geometry=True))
+    queue.push(TOPIC_AGGREGATE, {
+        "job_id": full, "media_type": "video", "model_version_id": "face-probe-v1",
+    })
+    status = wait_for_status(db, full, {"complete", "dead_letter", "failed"})
+    full_job = db.get_job(full)
+    check("positive control: a fully covered job reports total == count",
+          full_job["items_total"] == 4 and full_job["item_count"] == 4,
+          f"{full_job['item_count']}/{full_job['items_total']}")
 
     band = straddle_job["band"]
     check(
