@@ -7,6 +7,7 @@ at import time.
 from __future__ import annotations
 
 import os
+import pathlib
 from dataclasses import dataclass, field
 
 
@@ -23,6 +24,47 @@ def _bool(key: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def cpu_quota() -> float | None:
+    """CPU cores this process may actually use, from the cgroup. None if unlimited.
+
+    Exists because `os.cpu_count()` reports the HOST's cores inside a container,
+    not the quota. torch then sizes its thread pool to a number of cores it does
+    not have, and the threads fight over a fraction of one.
+
+    That is not a small effect. `measured: yes` 2026-09-01 on Railway: model load
+    41.8s against 6-16s locally, and a first inference of **225 seconds** against
+    0.40s locally -- roughly 500x, on a machine that is not 500x slower. A single
+    image took 222s end to end, which for a demo is indistinguishable from broken.
+
+    Reads cgroup v2 first (`cpu.max`, "quota period" or "max period"), then v1
+    (`cpu.cfs_quota_us` / `cpu.cfs_period_us`). Any failure returns None and the
+    caller falls back to os.cpu_count(), which is the right behaviour on a real
+    host where there is no quota to find.
+    """
+    try:
+        raw = pathlib.Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if len(raw) == 2 and raw[0] != "max":
+            return int(raw[0]) / int(raw[1])
+    except Exception:
+        pass
+    try:
+        q = int(pathlib.Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+        period = int(pathlib.Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+        if q > 0 and period > 0:
+            return q / period
+    except Exception:
+        pass
+    return None
+
+
+def usable_threads() -> int:
+    """Thread count to give torch/OpenMP. At least 1, never more than the quota."""
+    quota = cpu_quota()
+    if quota:
+        return max(1, int(quota))
+    return max(1, os.cpu_count() or 1)
 
 
 @dataclass(frozen=True)

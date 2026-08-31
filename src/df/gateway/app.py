@@ -536,6 +536,36 @@ WORKER_GRACE_SECONDS = 150
 _STARTED_AT = time.monotonic()
 
 
+@app.get("/")
+def root() -> dict:
+    """Service identity and where to go next.
+
+    Exists because the bare URL returned FastAPI's `{"detail":"Not Found"}`,
+    which is correct -- there is no root route -- and reads as a broken deploy to
+    anyone who clicks it. A judge or a teammate opening the API URL should see
+    what this is and where the interesting endpoints are, not a 404.
+
+    Deliberately says nothing about a specific job and takes no input, so it is
+    safe to hand to anyone.
+    """
+    return {
+        "service": "Deepfake Detection API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/healthz",
+        "detector": {
+            "backend": settings.inference_backend,
+            # The caveats travel with the identity, so the first thing anyone
+            # reads about this service is what it does not claim.
+            "note": (
+                "Scores are advisory. The detector is a research checkpoint, "
+                "calibration is unfitted, and every result carries advisories "
+                "explaining how far it can be trusted."
+            ),
+        },
+    }
+
+
 @app.get("/healthz")
 def healthz() -> JSONResponse:
     """Liveness for the gateway AND the workers behind it.

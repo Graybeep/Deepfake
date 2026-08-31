@@ -182,6 +182,16 @@ class EfficientNetDetector(Detector):
                 f"DF_AUDIO_WEIGHTS, or run with DF_INFERENCE_BACKEND=stub."
             )
 
+        # Also set torch's own intra-op count, not just the OpenMP env. The
+        # env var is what OpenMP reads at import; this covers a process that
+        # imported torch before the env was set.
+        try:
+            from df.config import usable_threads
+
+            torch.set_num_threads(usable_threads())
+        except Exception:
+            log.warning("could not pin torch threads", exc_info=True)
+
         self._torch = torch
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.input_size = input_size

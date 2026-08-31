@@ -31,6 +31,8 @@ import subprocess
 import sys
 import time
 
+from df.config import cpu_quota, usable_threads
+
 # Order matters. Migrations must finish before anything opens a connection that
 # assumes the schema, and the gateway must come last so it is not accepting
 # uploads while the workers behind it are still starting.
@@ -65,6 +67,31 @@ def _migrate() -> None:
         raise SystemExit("migrations failed; refusing to start")
 
 
+def _pin_threads() -> None:
+    """Size the OpenMP/MKL thread pools to the container's real CPU quota.
+
+    Set here, before any worker is spawned, because OMP_NUM_THREADS is read by
+    the OpenMP runtime when torch is IMPORTED -- setting it later in the child
+    has no effect. Children inherit this environment.
+
+    Why it matters: os.cpu_count() reports the host's cores inside a container,
+    so torch sizes its pool for cores it does not have and the threads contend
+    over a fraction of one. `measured: yes` 2026-09-01 on Railway, before this:
+    a first inference of 225 seconds against 0.40s locally, and 222s for a
+    single image end to end. Not a slower machine -- a thread pool fighting
+    itself.
+
+    Existing values are respected: if an operator has tuned this deliberately,
+    do not overrule them.
+    """
+    n = str(usable_threads())
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(var, n)
+    quota = cpu_quota()
+    _log(f"cpu quota={quota if quota else 'none (host)'} -> threads={n}")
+
+
 def _shutdown(signum, _frame) -> None:
     _log(f"signal {signum}: stopping {len(_procs)} process(es)")
     for name, proc in _procs:
@@ -84,6 +111,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    _pin_threads()
     _migrate()
 
     for name, cmd in WORKERS:
