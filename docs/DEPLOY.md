@@ -77,6 +77,55 @@ uploaded image. Tier 1 deletes the media on completion anyway, and
 `media_deleted` already models exactly this. If a UI is ever changed to
 re-render the uploaded file, a redeploy mid-demo will empty the screen.
 
+## Deploy checklist
+
+Run in this order. Do not proceed past a failure.
+
+```bash
+railway login
+railway init            # or `railway link` for an existing project
+railway up              # builds docker/deploy.Dockerfile, uploads ~254MB of context
+railway domain          # get the public URL
+```
+
+Then set the variables from the table above in the Railway dashboard, and
+redeploy. `DF_PUBLIC_BASE_URL` needs the URL from `railway domain`, so it cannot
+be set before the first deploy.
+
+**Expect a slow first deploy.** The build context carries ~254MB of weights (a
+build-time fetch was tried and reverted — see `docker/deploy.Dockerfile`), and
+the image is 3.3GB.
+
+### Things that behave differently than on localhost
+
+- **`$PORT`** is injected. The launcher reads it and binds `0.0.0.0`; a hardcoded
+  port or a `127.0.0.1` bind gives a container that runs fine and a public URL
+  that 502s, which is indistinguishable from a crash. *(Verified: reads `PORT`,
+  binds `0.0.0.0`.)*
+- **Health check vs warm-up.** `/healthz` answers as soon as uvicorn binds, which
+  is ~6s before the model finishes warming. That is deliberate — the queue
+  absorbs a job submitted in that window — but it means healthy does not mean
+  warm. `healthcheckTimeout` is 300s so a slow boot is not killed mid-load.
+- **Neon needs SSL, and has two endpoints.** Use the **direct** endpoint for
+  migrations and the **pooled** one for the app. Five processes each opening a
+  pool against the direct endpoint is how a free tier runs out of connections.
+- **Upstash needs `rediss://`**, not `redis://`, or TLS fails. *(Verified: every
+  client goes through `redis.Redis.from_url`, which handles `rediss://`.)*
+- **Migrations do not race.** `df.deploy` runs them once in the parent process
+  before starting any worker. *(Verified.)*
+
+### Fallback, if the platform is sick
+
+The container is verified working locally, which makes a tunnel a free fallback
+rather than an architecture:
+
+```bash
+cloudflared tunnel --url http://localhost:8080
+```
+
+Point the UI at the tunnel URL and add it to `DF_CORS_ORIGINS`. Primary stays the
+platform; this is for the morning when something is down and there is no time.
+
 ## Before presenting
 
 Everything here idles down: Neon scale-to-zero, Upstash, the platform's own

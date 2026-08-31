@@ -1,0 +1,41 @@
+# Build context. Everything here is uploaded to the builder on every deploy, so
+# what is NOT excluded costs wall-clock time on each push.
+#
+# NOTE what is deliberately NOT excluded: models/. The deploy image bakes the
+# checkpoint via COPY (a platform has no host filesystem to bind-mount from), so
+# excluding it breaks the build. It is ~254MB and it has to travel -- a build-time
+# fetch was tried to avoid that and reverted; see docker/deploy.Dockerfile.
+
+# The local virtualenv: ~254MB, needed by nothing in any image, and the single
+# biggest thing in the context.
+.venv/
+venv/
+
+.git/
+.gitignore
+.githooks/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.mutate-pycache/
+
+# Tests and docs are not installed into any image. The deploy image copies only
+# migrations/, scripts/ and src/.
+tests/
+docs/
+*.md
+!README.md
+
+# Local environment and compose overlays -- config is injected by the platform.
+.env
+docker-compose*.yml
+
+# Presentation deck: deliberately untracked, and no business in an image.
+*.pptx
+
+# Scratch
+data/
+*.log
+
