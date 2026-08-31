@@ -8,8 +8,8 @@ public.**
 
 | Variable | Value | Why |
 |---|---|---|
-| `DF_PG_DSN` | Neon connection string | Postgres backs the audit row and the per-face evidence the UI renders |
-| `DF_REDIS_URL` | Upstash connection string | Queue, job status, and the rate limiter |
+| `DF_PG_DSN` | `${{Postgres.DATABASE_URL}}` | Postgres backs the audit row and the per-face evidence the UI renders |
+| `DF_REDIS_URL` | `${{Redis.REDIS_URL}}` | Queue, job status, and the rate limiter |
 | `DF_S3_ENDPOINT` | `file:///data/media` | Selects `LocalDiskStorage`; no object storage service |
 | `DF_LOCAL_STORAGE_ROOT` | `/data/media` | Created at image build time, world-writable |
 | `DF_PUBLIC_BASE_URL` | `https://<app>.up.railway.app` | Upload grants are absolute; a relative URL breaks a browser on another origin |
@@ -121,6 +121,26 @@ uploaded image. Tier 1 deletes the media on completion anyway, and
 `media_deleted` already models exactly this. If a UI is ever changed to
 re-render the uploaded file, a redeploy mid-demo will empty the screen.
 
+## Managed Postgres and Redis, not Neon and Upstash
+
+`railway add --database postgres` and `--database redis`. Same private network,
+no external signups, and no scale-to-zero cold start stacking on top of the model
+warm-up. Reference them as `${{Postgres.DATABASE_URL}}` / `${{Redis.REDIS_URL}}`
+rather than pasting connection strings, so a rotated credential does not silently
+break the app.
+
+Note the internal Redis URL is `redis://`, **not** `rediss://` — private
+networking, no TLS termination to negotiate. The `rediss://` requirement applies
+to Upstash, not to this.
+
+**Setting variables from Git Bash mangles absolute paths.** `DF_FACE_WEIGHTS=/models/...`
+was stored as `C:/Program Files/Git/models/...` and the worker died at boot with
+a `FileNotFoundError` naming that path. Prefix with `MSYS_NO_PATHCONV=1`:
+
+```bash
+MSYS_NO_PATHCONV=1 railway variables --set "DF_FACE_WEIGHTS=/models/weights/dfdc_b7_ns_seed111.pth"
+```
+
 ## Deploy checklist
 
 Run in this order. Do not proceed past a failure.
@@ -157,6 +177,40 @@ the image is 3.3GB.
   client goes through `redis.Redis.from_url`, which handles `rediss://`.)*
 - **Migrations do not race.** `df.deploy` runs them once in the parent process
   before starting any worker. *(Verified.)*
+
+### DO NOT REMOVE THE THREAD PINNING
+
+`df.deploy._pin_threads()` sets `OMP_NUM_THREADS` before spawning any worker.
+That line looks like cargo cult. It is not. Measured on Railway, before and
+after, on the same image:
+
+| | before | after |
+|---|---|---|
+| model load | 41.82 s | 3.01 s |
+| first inference | **225.04 s** | **0.21 s** |
+| end to end | 222.2 s | 4.0 s |
+
+**`os.cpu_count()` reports the HOST's cores inside a container, not the cgroup
+quota.** torch sized its thread pool for cores it did not have, and those threads
+contended over a 2-core allocation. A single image took nearly four minutes,
+which for a demo is indistinguishable from broken — and nothing in the logs says
+"too many threads", it just runs slowly and looks like a big model on a small
+machine.
+
+Three details that matter if you touch this:
+
+- It must be set **before torch is imported**. The OpenMP runtime reads
+  `OMP_NUM_THREADS` at import; setting it afterwards in the child does nothing.
+  That is why it lives in the launcher and not in the worker.
+- `cpu_quota()` returns `None` on a real host, where there is no quota, and
+  `usable_threads()` then falls back to `os.cpu_count()` — correct outside a
+  container.
+- Existing values are respected (`setdefault`), so deliberate operator tuning
+  is not overruled.
+
+**This is not specific to torch or to Railway.** Any thread-pool sizing from
+`os.cpu_count()` inside a container has the same bug. The rest of this tree was
+checked; nothing else sizes a pool that way.
 
 ### Fallback, if the platform is sick
 
