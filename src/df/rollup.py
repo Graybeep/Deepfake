@@ -89,7 +89,7 @@ def face_evidence(
         # and those are very different facts. NULL-ish (absent) when nothing
         # recorded it, which is not the same as "none were discarded".
         "detections_discarded": disc.get("detections_discarded"),
-        "min_detection_confidence": disc.get("min_detection_confidence"),
+        "detection_confidence_ratio": disc.get("detection_confidence_ratio"),
         "discarded_faces": disc.get("discarded") or [],
         "faces_total": len(faces),
         "faces_reported": min(len(ranked), limit),

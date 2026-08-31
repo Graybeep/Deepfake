@@ -633,30 +633,39 @@ EXTRACT_FACE_WITNESS = (
 )
 
 GATE_WITNESS = (
-    "import os; os.environ['DF_MIN_DETECTION_CONFIDENCE'] = '0.5';"
+    # Three probes, each discriminating a different mutation:
+    #  A: the measured portrait -- does the artefact gate at all?
+    #  B: a LONE detection at 0.30, deliberately BELOW the 0.4 ratio value.
+    #     Relative keeps it (ratio 1.0); an absolute floor gates it and
+    #     empties the set. A lone 0.44 cannot tell those apart, which is why
+    #     the first version of this witness reported NO-OP.
+    #  C: two STRONG detections. Needed to catch "only the best survives",
+    #     which is invisible whenever the input has one clear winner.
+    "import os; os.environ['DF_DETECTION_CONFIDENCE_RATIO'] = '0.4';"
     "from df.pipelines.extract import FaceCrop;"
     "import df.workers.cpu_preprocess as cp;"
     "from df.config import Settings; cp.settings = Settings();"
     "c = lambda i, k: FaceCrop(frame_index=0, face_index=i, data=b'x',"
     "                          confidence=k, bbox=(1, 1, 120, 120));"
-    "d = [];"
-    "kept = cp._gate_detections([c(0, 0.97), c(1, 0.32)], d, frame_index=0);"
-    "print([x.face_index for x in kept], [(y['face_index'], y['confidence']) for y in d])"
+    "dA = [];"
+    "A = cp._gate_detections([c(0, 0.968), c(1, 0.316), c(2, 0.075)], dA, frame_index=0);"
+    "B = cp._gate_detections([c(9, 0.30)], [], frame_index=0);"
+    "C = cp._gate_detections([c(3, 0.95), c(4, 0.80)], [], frame_index=0);"
+    "print([x.face_index for x in A], len(dA),"
+    "      [x.face_index for x in B], [x.face_index for x in C])"
 )
 
 GATE_MUTATIONS = [
     Mutation(
-        # No gate at all: junk reaches the model, as it did before.
         label="detection gate disabled",
         file="src/df/workers/cpu_preprocess.py",
-        old="        if crop.confidence < floor:",
+        old="        if rel < ratio:",
         new="        if False:",
         witness=GATE_WITNESS,
         test="tests/test_detection_gate.py",
     ),
     Mutation(
-        # Gate, but drop silently -- the 2026-08-30 bug, reintroduced. The
-        # crop never reaches the model AND leaves no trace for a dispute.
+        # Gate, but drop silently -- the 2026-08-30 bug reintroduced.
         label="gated detections not recorded",
         file="src/df/workers/cpu_preprocess.py",
         old="            discarded.append({",
@@ -665,11 +674,22 @@ GATE_MUTATIONS = [
         test="tests/test_detection_gate.py",
     ),
     Mutation(
-        # Inverted: keep the junk, drop the good detections.
-        label="gate inverted (keeps only low confidence)",
+        # The whole point of the relative form: an ABSOLUTE floor can empty
+        # the set, which is what leaves a lone marginal face undetermined.
+        label="absolute floor instead of a ratio (can empty the set)",
         file="src/df/workers/cpu_preprocess.py",
-        old="        if crop.confidence < floor:",
-        new="        if crop.confidence >= floor:",
+        old="        rel = crop.confidence / best",
+        new="        rel = crop.confidence",
+        witness=GATE_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # Keep only the single best detection, discarding a genuine second
+        # face -- the case worst-case rollup exists for.
+        label="only the best detection survives",
+        file="src/df/workers/cpu_preprocess.py",
+        old="        if rel < ratio:",
+        new="        if rel < 1.0:",
         witness=GATE_WITNESS,
         test="tests/test_detection_gate.py",
     ),

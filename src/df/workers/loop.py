@@ -21,6 +21,20 @@ def _stop(*_args) -> None:
     _running = False
 
 
+def configure_logging() -> None:
+    """Set up logging. Idempotent -- basicConfig is a no-op once configured.
+
+    Extracted from run_worker because anything a worker does BEFORE entering the
+    consume loop was invisible: basicConfig ran inside run_worker, so a model
+    warm-up logging "ready" emitted to an unconfigured root logger and vanished.
+    Startup work that reports nothing is indistinguishable from startup work that
+    did not happen.
+    """
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
+
+
 def run_worker(
     topic: str,
     handler: Callable[[Message], None],
@@ -29,9 +43,7 @@ def run_worker(
     db: Db | None = None,
     status: JobStatus | None = None,
 ) -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    configure_logging()
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
 

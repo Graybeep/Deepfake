@@ -42,38 +42,63 @@ def _face_size(crop) -> dict:
 
 
 def _gate_detections(crops: list, discarded: list, *, frame_index: int) -> list:
-    """Drop detections the detector itself is not confident in, and RECORD them.
+    """Drop detections far weaker than the best one in the same frame, and
+    RECORD what was dropped.
 
     Gating here -- before the crop is stored and before it reaches the model --
-    rather than reweighting downstream. The reason is that a non-face region
-    entering the model produces an arbitrary number, and there is no principled
-    way to combine an arbitrary number with a real one. Averaging it is not
-    better than taking the max of it, only less alarming.
+    rather than reweighting downstream. A non-face region entering the model
+    produces an arbitrary number, and there is no principled way to combine an
+    arbitrary number with a real one: averaging it is not better than taking the
+    max of it, only less alarming.
 
-    Measured 2026-08-31 on a public-domain portrait: Haar returned the real face
-    at confidence 0.97 scoring 0.54 (authentic), plus two artefacts at 0.32 and
-    0.08. The 0.32 artefact scored 55.79 and, through worst-case rollup, set the
-    verdict for the whole image to `uncertain`. The real face was never the
-    problem; a non-face crop was.
+    Worst-case rollup over the survivors is deliberately untouched. One
+    manipulated face is what makes an image manipulated, so a confidence-weighted
+    mean across faces would drag a swapped face's score toward the crowd in a
+    group photo -- trading a visible false positive for invisible false negatives
+    on precisely the case this detector exists for.
 
-    Worst-case rollup over the survivors is deliberately unchanged. One
-    manipulated face is what makes an image manipulated, so averaging across
-    faces would trade this visible false positive for invisible false negatives
-    on precisely the case the detector exists for.
+    RELATIVE, not an absolute floor. See `Settings.detection_confidence_ratio`:
+    the confidence is a squashed cascade reject level with no probabilistic
+    meaning, so comparing detections against each other is the only comparison it
+    supports. Two consequences worth stating:
 
-    This restores, with a record, the gate that was removed on 2026-08-30 for
-    leaving no trace. The detections are not silently dropped: they land in the
-    preprocess.complete event and are surfaced per-face by the API, so a reader
-    sees "discarded, 32% confidence" rather than nothing at all.
+      * it is invariant to the scale of the untrusted quantity;
+      * it cannot empty a non-empty set, because the best detection is always
+        ratio 1.0. A lone marginal face is kept and reported with its low
+        confidence rather than gated into `undetermined` -- a degraded answer
+        instead of no answer, guaranteed structurally rather than by a fallback
+        branch.
+
+    Measured 2026-08-31, the entire evidence base: a public-domain portrait where
+    Haar returned the real face at 0.968 (which B7 scored 0.54, authentic) plus
+    artefacts at 0.316 and 0.075. The 0.316 artefact scored 55.79 and, through
+    worst-case rollup, set the verdict for the whole image to `uncertain`. Ratio
+    0.316/0.968 = 0.33, so it gates; the real face survives at 1.0.
+
+    This restores, with a record, the gate removed on 2026-08-30 for leaving no
+    trace. Dropped detections land in the preprocess.complete event and are
+    surfaced per-face by the API.
     """
-    floor = settings.min_detection_confidence
+    if not crops:
+        return []
+
+    best = max(c.confidence for c in crops)
+    if best <= 0:
+        # Nothing to compare against. Keeping all is the honest degradation:
+        # a ratio is undefined here, and inventing an ordering would be worse.
+        return list(crops)
+
+    ratio = settings.detection_confidence_ratio
     kept = []
     for crop in crops:
-        if crop.confidence < floor:
+        rel = crop.confidence / best
+        if rel < ratio:
             discarded.append({
                 "frame_index": frame_index,
                 "face_index": crop.face_index,
                 "confidence": round(float(crop.confidence), 6),
+                "relative_to_best": round(float(rel), 6),
+                "best_in_frame": round(float(best), 6),
                 **_face_size(crop),
             })
             continue
@@ -155,7 +180,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
         # cannot hold these -- score is NOT NULL and these were never scored, so
         # a row would have to invent one. This event is the permanent trace.
         "detections_discarded": len(discarded),
-        "min_detection_confidence": settings.min_detection_confidence,
+        "detection_confidence_ratio": settings.detection_confidence_ratio,
         "discarded": discarded[:50],
     })
 

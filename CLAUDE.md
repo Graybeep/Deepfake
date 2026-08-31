@@ -47,28 +47,38 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   the STUB extractor (0.6/0.7/0.8 by construction), so "the weights genuinely
   differ" has never been observed on the real path, and `min_confidence` has
   never been tuned against it. Waits on the same labelled set as calibration.
-- **Detection is GATED, not reweighted** (`DF_MIN_DETECTION_CONFIDENCE`, default
-  0.3). Boxes below the floor never reach the model; worst-case rollup over the
-  survivors is unchanged. Both halves matter:
-  A non-face region entering the model returns an arbitrary number, and there is
-  no principled way to combine an arbitrary number with a real one — averaging it
-  is not better than maxing it, only less alarming. So the repair belongs where
-  the junk enters, not downstream.
-  And **do not replace worst-case with a mean across faces.** One manipulated
-  face is what makes an image manipulated; a confidence-weighted mean would drag
-  a swapped face's score toward the crowd in a group photo, trading a visible
-  false positive for invisible false negatives on exactly the case this tool
-  exists for. That was proposed on 2026-08-31 and correctly rejected — it was
-  also underspecified about whether the class came from worst-case or from the
-  banded aggregate, which is the part that decides whether it works at all.
-  Gated detections are **recorded** (`preprocess.complete` event, surfaced
-  per-face by the API) — `job_items` cannot hold them because `score` is NOT NULL
-  and they were never scored.
-  **The 0.3 default is untuned.** Evidence base is one public-domain portrait:
-  real face 0.97 scoring 0.54, artefacts at 0.32 and 0.08, and the 0.32 artefact
-  scored 55.79 and made the whole image `uncertain`. **0.3 does not catch 0.32.**
-  0.5 does, verified end to end, but is a constant fitted to n=1. The real repair
-  is a detector that returns a genuine detection probability (RetinaFace/SCRFD).
+- **Detection is GATED, not reweighted, and the gate is RELATIVE**
+  (`DF_DETECTION_CONFIDENCE_RATIO`, default 0.4): a detection is dropped below
+  `ratio * best-in-frame`. Worst-case rollup over survivors is unchanged.
+  Gating, because a non-face region entering the model returns an arbitrary
+  number and averaging an arbitrary number with a real one is not better than
+  maxing it, only less alarming.
+  **Never replace worst-case with a mean across faces.** One manipulated face is
+  what makes an image manipulated; a mean drags a swapped face's score toward the
+  crowd in a group photo — a visible false positive traded for invisible false
+  negatives on exactly the case this tool exists for. Proposed 2026-08-31 and
+  rejected; it was also underspecified about whether the class came from
+  worst-case or from the banded aggregate, which is what decides if it works.
+  **Relative, because the quantity has no semantics.** These are OpenCV
+  `levelWeights` (`outputRejectLevels=True`) — unbounded cascade reject levels
+  squashed by /10. No absolute floor is more justified than another; an earlier
+  absolute 0.3 was replaced after it failed to catch a 0.316 artefact and the
+  "fix" of moving it to 0.5 was just a constant fitted to n=1 with extra
+  indirection. A ratio is scale-invariant and **cannot empty a non-empty set**
+  (the best is always 1.0), so a lone marginal face is kept and flagged rather
+  than gated into `undetermined` — structural, not a fallback branch.
+  Gated detections are **recorded** (`preprocess.complete`, surfaced per-face by
+  the API, with ratio and best-in-frame so the number is interpretable).
+  `job_items` cannot hold them: `score` is NOT NULL and they were never scored.
+  0.4 is chosen on failure asymmetry, not evidence. Real repair: RetinaFace/SCRFD.
+- **Workers warm their model at boot**, before consuming. `measured: yes`
+  2026-08-31: 10.68s to load B7 plus 0.48s for the first forward pass. Lazy
+  loading meant the first job after a deploy paid all of it, which on a demo is
+  the one request that matters, and always-on hosting does not help a lazy load.
+  `configure_logging()` is called before warming — it used to live inside
+  `run_worker`, so anything logged during startup went to an unconfigured root
+  logger and vanished. Startup work that reports nothing is indistinguishable
+  from startup work that did not happen.
 - The extractor no longer drops low-confidence faces itself. It did, below 0.3,
   which broke the stated rule that dropped items are "still recorded in
   job_items -- dropped, not deleted, so the audit trail shows what was ignored":

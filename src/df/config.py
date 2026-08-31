@@ -114,25 +114,37 @@ class Settings:
     # sampling
     video_fps_sample: float = field(default_factory=lambda: _float("DF_VIDEO_FPS_SAMPLE", 2.0))
     video_max_frames: int = field(default_factory=lambda: _int("DF_VIDEO_MAX_FRAMES", 300))
-    # Detection-confidence floor. Boxes below this never reach the model.
+    # Detection gate, expressed as a RATIO of the best detection in the same
+    # frame. A detection is dropped when its confidence is below
+    # `ratio * max(confidence in that frame)`.
     #
-    # UNTUNED, and chosen under deadline pressure from n=1 example: a public-
-    # domain portrait where Haar returned one real face at 0.97 and two
-    # artefacts at 0.32 and 0.08, and the 0.32 artefact set the whole verdict.
-    # 0.3 sits between those observations and nothing more principled than that.
+    # Relative rather than absolute, because the quantity has no semantics to
+    # threshold against. These confidences are OpenCV `levelWeights` from
+    # `detectMultiScale3(outputRejectLevels=True)` -- unbounded stage-rejection
+    # scores from inside the cascade, squashed into 0-1 by dividing by 10. That
+    # is a monotone transform of an internal score, not a probability. So no
+    # absolute floor is more justified than any other: 0.3 and 0.5 are equally
+    # arbitrary, and "which threshold is correct" is a question the underlying
+    # number cannot answer.
     #
-    # It gates rather than reweights on purpose. A non-face region entering the
-    # model produces an arbitrary number, and averaging an arbitrary number with
-    # a real one is not more principled than taking the max of them -- just less
-    # alarming. Worst-case rollup over survivors is preserved, because one
-    # manipulated face is what makes an image manipulated, and any averaging
-    # across faces trades a visible false positive for invisible false negatives
-    # on exactly the case this tool exists for.
+    # A ratio sidesteps that. It is invariant to the scale of the confidence,
+    # which is the part we do not trust, and it compares detections only against
+    # each other within the same image -- which is the comparison Haar's weights
+    # can actually support.
     #
-    # Discarded detections are RECORDED (preprocess.complete event, and surfaced
-    # per-face in the API), never silently dropped.
-    min_detection_confidence: float = field(
-        default_factory=lambda: _float("DF_MIN_DETECTION_CONFIDENCE", 0.3)
+    # And it CANNOT empty a non-empty detection set: the best detection always
+    # has ratio 1.0. A lone marginal face is therefore kept and reported with its
+    # low confidence rather than gated into `undetermined`, so a degraded answer
+    # is available instead of no answer. That property is structural, not a
+    # fallback branch that might be wrong.
+    #
+    # 0.4 is still a chosen number, and it is chosen on failure asymmetry rather
+    # than evidence: on the one image measured, the artefact/real ratio was
+    # 0.316/0.968 = 0.33 (gated), and a lone marginal detection is ratio 1.0
+    # (kept). The real repair remains a detector that returns a genuine detection
+    # probability -- RetinaFace/SCRFD -- not a better constant here.
+    detection_confidence_ratio: float = field(
+        default_factory=lambda: _float("DF_DETECTION_CONFIDENCE_RATIO", 0.4)
     )
     audio_chunk_seconds: float = field(
         default_factory=lambda: _float("DF_AUDIO_CHUNK_SECONDS", 3.0)

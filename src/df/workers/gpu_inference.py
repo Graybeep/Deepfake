@@ -9,13 +9,15 @@ model (one model_version_id); audio uses its own model.
 from __future__ import annotations
 
 import logging
+import time
 
 from df import storage as storage_mod
+from df.config import settings
 from df.db import Db
 from df.inference.registry import get_audio_model, get_face_model
 from df.jobstatus import JobStatus
 from df.queue import TOPIC_AGGREGATE, TOPIC_INFERENCE, Message, Queue, build_queue
-from df.workers.loop import run_worker
+from df.workers.loop import configure_logging, run_worker
 
 log = logging.getLogger("df.worker.gpu")
 
@@ -88,9 +90,55 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     log.info("scored job=%s items=%d model=%s", job_id, len(rows), detector.version.model_version_id)
 
 
+def _warm_models() -> None:
+    """Load the weights and run one throwaway inference BEFORE consuming work.
+
+    The model is behind an lru_cache and was previously built on the first
+    message, so the first real job paid the whole cost: `measured: yes`
+    2026-08-31, 12.0s to load the 254MB B7 and initialise timm, on top of
+    0.32s/face steady-state.
+
+    Running always-on does not help if the load is lazy -- the first request
+    after a deploy still pays it, which on a demo is the one request that
+    matters. Warming here moves that cost into container startup, where nobody
+    is waiting on it, and the dummy forward pass matters as much as the load:
+    the first inference allocates workspace and specialises kernels, so loading
+    without running leaves some of the stall in place.
+
+    Failing here is deliberate. A worker that cannot load its weights should die
+    at boot with a clear error, not accept a job and dead-letter it.
+    """
+    if settings.inference_backend != "torch":
+        log.info("stub backend: nothing to warm")
+        return
+
+    import numpy as np
+
+    t0 = time.perf_counter()
+    detector = get_face_model()
+    loaded = time.perf_counter() - t0
+
+    # A 1x1 PNG is enough to force the first forward pass; the detector resizes
+    # whatever it is given.
+    import cv2
+
+    blank = cv2.imencode(".png", np.zeros((8, 8, 3), np.uint8))[1].tobytes()
+    t0 = time.perf_counter()
+    detector.predict_batch([blank])
+    warmed = time.perf_counter() - t0
+
+    log.info(
+        "warm: %s loaded in %.2fs, first inference %.2fs, ready",
+        detector.version.model_version_id, loaded, warmed,
+    )
+
+
 def main() -> None:
     db, storage = Db(), storage_mod.build_storage()
     queue, status = build_queue(), JobStatus()
+    # Before warming, so the warm-up is visible in the logs at all.
+    configure_logging()
+    _warm_models()
     run_worker(
         TOPIC_INFERENCE,
         lambda m: handle(m, db=db, storage=storage, queue=queue, status=status),

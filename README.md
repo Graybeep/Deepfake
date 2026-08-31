@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-246 tests, no infrastructure required. The suite covers the two pipeline rules
+261 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -144,239 +144,52 @@ no-op.
 internal cascade score, not a probability; it is squashed to 0–1 by dividing by
 10, which is arbitrary and monotone and nothing more.
 
-**It gates rather than reweights.** Detections below
-`DF_MIN_DETECTION_CONFIDENCE` (default `0.3`) are dropped before they reach the
-model, and worst-case rollup over the survivors is unchanged.
+**It gates rather than reweights, and the gate is RELATIVE.** A detection is
+dropped when its confidence is below `DF_DETECTION_CONFIDENCE_RATIO` (default
+`0.4`) times the best detection **in the same frame**. Worst-case rollup over the
+survivors is unchanged.
 
-Both halves of that are deliberate. Gating, because a non-face region entering
-the model returns an arbitrary number and there is no principled way to combine
-an arbitrary number with a real one — averaging it is not better than maxing it,
-only less alarming. Worst-case preserved, because one manipulated face is what
-makes an image manipulated; a confidence-weighted mean across faces would drag a
-swapped face's score toward the crowd in a group photo, trading a visible false
-positive for **invisible false negatives** on precisely the case the tool exists
-for.
+Three things are deliberate there.
 
-**What is gated is recorded.** An earlier version of this gate lived inside the
+*Gating, not reweighting*: a non-face region entering the model returns an
+arbitrary number, and there is no principled way to combine an arbitrary number
+with a real one — averaging it is not better than maxing it, only less alarming.
+
+*Worst-case preserved*: one manipulated face is what makes an image manipulated.
+A confidence-weighted mean across faces would drag a swapped face's score toward
+the crowd in a group photo, trading a visible false positive for **invisible
+false negatives** on precisely the case the tool exists for.
+
+*Relative, not an absolute floor*: these confidences are OpenCV `levelWeights`
+from `detectMultiScale3(outputRejectLevels=True)` — unbounded stage-rejection
+scores from inside the cascade, squashed into 0–1 by dividing by 10. That is a
+monotone transform of an internal score, **not a probability**, so no absolute
+threshold is more justified than any other; "which floor is correct" is a
+question the number cannot answer. A ratio is invariant to that untrusted scale
+and compares detections only against each other, which is the comparison Haar's
+weights can actually support.
+
+It also **cannot empty a non-empty detection set** — the best detection is always
+ratio 1.0. A lone marginal face (bad light, a turned head, glasses) is kept and
+reported with its low confidence rather than gated into `undetermined`. That is a
+structural property, not a fallback branch.
+
+**What is gated is recorded.** An earlier version of this gate lived in the
 extractor and was removed because an extraction-time drop left no row and no
 count. It now writes to the `preprocess.complete` event and is surfaced per-face
-by the API, so a reader sees `discarded, 32% confidence` rather than nothing.
-(`job_items` cannot hold them: `score` is `NOT NULL`, and these were never
-scored.)
+by the API, with the ratio and the frame's best confidence alongside — `0.316`
+means nothing unless you know it was compared against `0.968`. (`job_items`
+cannot hold them: `score` is `NOT NULL`, and they were never scored.)
 
-**The 0.3 default is untuned and fitted to nothing.** Measured on one
-public-domain portrait: Haar returned the real face at 0.97 (scoring 0.54,
-authentic) plus artefacts at 0.32 and 0.08 — and the 0.32 artefact scored 55.79,
-which worst-case rollup turned into `uncertain` for the whole image. **0.3 does
-not catch 0.32.** Raising it to 0.5 fixes that one image (verified: gated,
-recorded, verdict corrected to `likely_authentic` at 0.54) but would be fitting a
-constant to a single example. The real repair is a detector returning an actual
-detection probability — RetinaFace/SCRFD — not a better guess at this number.
+Measured end to end on a public-domain portrait: Haar returned the real face at
+`0.968` (B7 scored it `0.54`, authentic) plus artefacts at `0.316` and `0.075`.
+Before the gate, the `0.316` artefact scored `55.79` and worst-case rollup made
+the whole image `uncertain`. After: `likely_authentic`, `0.54`, with
+`face 1 discarded, conf 0.316, rel 0.326` in the response.
 
-## Run the full service
-
-`docker compose up` **runs end to end** — `measured: yes` 2026-08-16 on the
-development machine, gated by `scripts/smoke_compose.py`.
-
-```bash
-cp .env.example .env
-docker compose up --build -d
-python scripts/smoke_compose.py     # gates the "runs end to end" claim
-```
-
-### GPU passthrough is a separate prerequisite
-
-Installing Docker Desktop does **not** give you GPU inference. The WSL2-enabled
-NVIDIA driver installs on the **Windows host**, never inside the WSL distro.
-Verify the chain before wiring the torch backend into compose — not on the day
-the weights land:
-
-```bash
-wsl nvidia-smi                                              # driver visible in WSL
-docker run --rm --gpus all nvidia/cuda:12.4.0-base nvidia-smi   # visible to containers
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
-```
-
-`scripts/smoke_compose.py` exercises what the in-process tests cannot: the
-presigned upload, the queue between containers, the audit trail on a real job,
-that the bytes are actually gone from the bucket afterwards, and that the rate
-limiter returns 429 under burst. It exits non-zero on the first failure.
-
-The old gate — no Kubernetes manifests until compose runs end to end — is
-**satisfied**, so K8s is schedulable rather than forbidden. It is still not
-next: on a single GPU node it buys nothing compose does not already do, while
-cluster provisioning, secrets, ingress and PVCs remain multi-day work. Per
-CLAUDE.md the trigger is a second node, a real availability requirement, or
-autoscaling the GPU pod — **not** the availability of time.
-
----
-
-## Architecture
-
-```
-                  ┌──────────┐  presigned POST    ┌────────┐
-   client ───────▶│ gateway  │───────────────────▶│  S3    │
-                  └────┬─────┘                    └───┬────┘
-                       │ enqueue                      │
-                       ▼                              ▼
-                 ┌───────────┐  face crops /   ┌──────────────┐
-                 │    cpu-   │  spectrograms   │     gpu-     │
-                 │ preprocess│────────────────▶│  inference   │
-                 └───────────┘                 └──────┬───────┘
-                  (network-isolated)                  │ job_items
-                                                      ▼
-                                              ┌───────────────┐
-                                              │ router        │
-                                              │ aggregate →   │
-                                              │ band → verdict│
-                                              │ → TTL delete  │
-                                              └───────────────┘
-```
-
-| Pipeline | Path |
-|---|---|
-| Video | Ingest → Frame Sample → Face Extract → Align → face model → Aggregate → Router |
-| Image | Ingest → Face Extract → Align → face model → Router (aggregation = identity) |
-| Audio | Ingest → Chunk → Spectrogram → audio model → Aggregate → Router |
-
-The face model is **shared** by video and image — same weights, one
-`model_version_id`. Audio is a separate model with its own id and its own
-calibration temperature.
-
-### Aggregation
-
-Confidence-weighted, symmetrically trimmed mean (`weighted_trimmed_mean.v1`).
-Never a plain mean: a plain mean lets a handful of bad frames drag a verdict
-around and gives low-confidence detections the same vote as clean ones.
-
-The method name and exact params are written onto every job row.
-
-**Two of the three mechanisms in that name have never once fired.**
-`measured: yes` that they are inert; `measured: no` that the values are right.
-Across 378 item rows the lowest confidence ever produced is 0.6, so
-`min_confidence=0.3` has never dropped anything. Across 40 decisions and 228
-items, zero were trimmed: `trim_frac=0.1` of a 6-item job floors to 0, and most
-jobs carry fewer than 10 items. So in practice this has been a **weighted mean
-with no trimming and no dropping**. The confidence *weighting* is real — the
-weights genuinely differ. The two robustness mechanisms are the ones that have
-never engaged. They are untuned defaults wearing the appearance of tuned ones,
-and they cannot be tuned until real weights produce a real score and confidence
-distribution.
-
-### Coverage, reported on every verdict
-
-`item_count` is what produced the score; `items_total` is what was extracted
-before confidence drops and trimming; `coverage` is the ratio. All three are on
-the job row and in the API.
-
-Without it a verdict off 1 usable frame of 50 and one off 50 of 50 are the same
-response, which is what forced the minimum-items floor to be the only protection
-a reader had: with no way to say *scored, but barely*, the only way to protect
-the consumer is to refuse to answer. With coverage published, a consumer can set
-its own bar.
-
-The floor is now per modality — **1 for image, 3 for video and audio**. An image
-is a complete observation of its subject; a video frame is one sample from a
-distribution over frames, and a rule about sampling variance should not apply to
-something that was not sampled. The image path already behaved this way by
-accident (`aggregate_identity` never consulted the floor), but recorded
-`min_items_for_score: 3` on every image job — a parameter the code had not
-applied to that result.
-
-**3 is an unvalidated placeholder** for video and audio. Deriving it means
-measuring score variance at k=1,2,3,5,10 on validation clips and taking the
-point where it flattens. There are no validation clips, and every score this
-system has produced comes from a hash of the input bytes.
-
-### Per-face evidence, not just a label
-
-A `>80` crowd scene and a `>80` close-up are the same word. `face_evidence` on a
-completed video/image result reports `faces_total`, how many carry recorded
-geometry, and the top faces by score with frame index, confidence and pixel
-size — so *"the highest is 38×41px in frame 412 of 47 faces"* is one read away.
-
-It does **not** decide anything. There is deliberately no per-face threshold and
-no `flagged` count: a per-face bar needs a false-positive rate measured per size
-bucket, which needs labelled validation data. Inventing one to make the field
-look complete would bake a second unvalidated constant into the contract while
-claiming to fix the first.
-
-Face geometry is new in migration 006 and this is why it was missing: `bbox` had
-been populated by the extractor since the first commit and **dropped on the
-floor in the CPU worker**, so across every job this system has ever run there is
-no record of how big any face was. It was not un-thresholded, it was
-unmeasurable. `face_w`/`face_h` are absolute pixels; relative-to-frame area is
-the better bucketing feature and is still unavailable, because frame dimensions
-are not recorded either.
-
-### Calibration: the machinery exists, the fit does not
-
-Temperature scaling turns a raw logit into a calibrated probability. It is fitted
-by minimising negative log-likelihood **against ground-truth labels** on a
-held-out set — labels are not an input that can be approximated, and without them
-there is no loss surface and nothing to minimise.
-
-Real weights landed 2026-08-29 and removed one of the two blockers. **The other
-one stands: there is no labelled held-out set here**, and the public evaluation
-sets already assessed for licensing (FF++, DeepfakeBench, DFDC) are gated,
-non-commercial, or both.
-
-So both temperatures are still `T=1.0`, which is the identity. What exists is the
-fitter, ready to run the day labels do:
-
-```bash
-python scripts/fit_calibration.py --scores held_out.jsonl --model face
-```
-
-It is verified against synthetic data whose true temperature is known by
-construction — distort a calibrated set by a factor of k and the fit must recover
-k. It does, at k = 0.5, 1.0, 1.8 and 3.0, and on a 5000-item demo it recovered
-2.435 against a true 2.4 while cutting ECE from 0.101 to 0.010. **That tests the
-optimiser and nothing else.** It says nothing about whether any real detector is
-calibrated.
-
-**Do not invent a temperature.** A fabricated T is worse than 1.0: 1.0 is visibly
-the identity and reads as "nothing applied", while a plausible 1.7 reads as
-measured and nothing in the system could contradict it.
-
-#### The runbook, once the data is on disk
-
-The chosen set is the **DFDC validation split** — 4,000 clips, 50/50, with
-`metadata.json`, and using 214 subjects **none of which appear in the training
-set**. Not the Kaggle `test_videos` folder, which is unlabelled by design.
-Getting it needs an AWS account and accepted terms at the dfdc.ai portal; that
-step needs a person.
-
-```bash
-# 1. score the labelled set with the REAL pipeline, emitting {logit, label}
-docker compose -f docker-compose.yml -f docker-compose.weights.yml     run --rm -v /path/to/dfdc_validation:/data:ro gpu-inference     python scripts/extract_logits.py --dir /data --out /tmp/heldout.jsonl
-
-# 2. fit
-python scripts/fit_calibration.py --scores /tmp/heldout.jsonl --model face     --describe "DFDC validation split, 4000 clips"
-
-# 3. paste the printed Temperature(...) into src/df/inference/calibration.py
-```
-
-`extract_logits.py` reuses the production sampler, extractor and detector rather
-than reimplementing them: a temperature is only valid for the distribution it was
-fitted on, and preprocessing is part of that distribution.
-
-Two limits to carry with any temperature this produces. It fits **per face crop**,
-which is the level `Temperature.apply` acts on — but the bands apply to the
-*aggregated* score, and a weighted trimmed mean of calibrated probabilities is not
-itself guaranteed calibrated. And DFDC is paid actors under controlled lighting,
-so the fit describes that distribution, not real uploads.
-
-`calibration` is now on the job row, the item rows, and the API. It has to be
-per-item and rolled up like `model_version_id`, because `model_version_id` is
-keyed on the *weights hash* — refit the temperature and every score changes while
-the id stays identical. This column is the only thing that tells those results
-apart, and a job whose rows carry two calibrations is refused rather than
-averaged across two scales.
-
-Every result from a real model now also carries an **UNCALIBRATED SCORE**
-advisory: the number is a raw model output, not a percentage likelihood, and the
-score bands were not drawn against that scale.
+`0.4` is still a chosen number, chosen on failure asymmetry rather than evidence.
+The real repair is a detector returning a genuine detection probability —
+RetinaFace/SCRFD — not a better constant here.
 
 ### Score bands
 
