@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import (
     Depends,
@@ -517,6 +518,64 @@ async def job_ws(websocket: WebSocket, job_id: str) -> None:
             pass
 
 
+# Topics whose workers a job cannot complete without. The retention sweeper is
+# deliberately absent: it runs on a timer and its absence delays cleanup rather
+# than stranding a job, so it must not be able to fail a health check.
+REQUIRED_WORKER_TOPICS = ("preprocess", "inference", "aggregate")
+
+# Grace after process start during which missing heartbeats are tolerated.
+# Workers take a few seconds to boot and the inference worker also loads a 254MB
+# model first -- measured at 6-16s depending on machine load. Without a grace
+# the very first health check fails and a platform rolls the deploy back before
+# anything had a chance to start.
+#
+# The grace is generous on purpose. This check exists to catch a worker that
+# DIED, and being slow to conclude that costs nothing; being quick to conclude
+# it wrongly costs the whole deploy.
+WORKER_GRACE_SECONDS = 150
+_STARTED_AT = time.monotonic()
+
+
 @app.get("/healthz")
-def healthz() -> dict:
-    return {"ok": True, "inference_backend": settings.inference_backend}
+def healthz() -> JSONResponse:
+    """Liveness for the gateway AND the workers behind it.
+
+    Reporting only on the gateway is the dangerous version, and it is what this
+    used to do. The job flow is asynchronous, so nothing blocks on the model
+    warming and a fast 200 is right for the gateway itself -- but that same
+    property means a dead inference worker is invisible from here. The platform
+    would see a healthy service, the gateway would accept uploads, jobs would
+    land in Redis, and nothing would pick them up. No error and no failed
+    status: a client watching a spinner forever, looking exactly like a model
+    thinking hard.
+
+    So a worker whose heartbeat has expired fails this check, and the platform
+    restarts the container rather than routing into a black hole.
+    """
+    workers: dict[str, bool] = {}
+    degraded: list[str] = []
+    for topic in REQUIRED_WORKER_TOPICS:
+        try:
+            alive = _status.worker_alive(topic)
+        except Exception:
+            # Redis unreachable. Report it rather than guessing either way --
+            # and it is genuinely unhealthy, since the queue lives there.
+            alive = False
+        workers[topic] = alive
+        if not alive:
+            degraded.append(topic)
+
+    warming = (time.monotonic() - _STARTED_AT) < WORKER_GRACE_SECONDS
+    ok = not degraded or warming
+
+    body = {
+        "ok": ok,
+        "inference_backend": settings.inference_backend,
+        "workers": workers,
+    }
+    if degraded:
+        # Named even while warming, so a boot that is merely slow can be told
+        # apart from one that is stuck.
+        body["degraded"] = degraded
+        body["warming"] = warming
+    return JSONResponse(status_code=200 if ok else 503, content=body)

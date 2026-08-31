@@ -62,6 +62,8 @@ def run_worker(
 
     log.info("worker up on topic=%s", topic)
     while _running:
+        # Before the blocking pop, so an idle worker still proves it is alive.
+        status.beat(topic)
         msg = queue.pop(topic, timeout=5)
         if msg is None:
             continue
@@ -70,6 +72,8 @@ def run_worker(
         try:
             handler(msg)
             queue.ack(msg)
+            # Again after handling: a long job must not let the key lapse.
+            status.beat(topic)
         except Exception as exc:  # noqa: BLE001 - worker must not die on one bad job
             log.exception("handler failed topic=%s job=%s", topic, job_id)
             retried = queue.fail(msg, f"{type(exc).__name__}: {exc}")

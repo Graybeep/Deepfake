@@ -41,6 +41,51 @@ class JobStatus:
             client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         self.r = client
 
+    # --- worker liveness ---------------------------------------------------
+    #
+    # /healthz answers as soon as uvicorn binds, which is correct for the
+    # gateway: the job flow is asynchronous and nothing blocks on the model
+    # warming. But it means a green health check says the GATEWAY is alive and
+    # says nothing whatsoever about the workers behind it.
+    #
+    # That combination is the worst failure this service can have on a demo. If
+    # the inference worker dies at boot -- OOM-killed on a small tier, say --
+    # the platform sees a healthy service, the gateway accepts the upload, the
+    # job lands in Redis, and nothing ever picks it up. No error, no failed
+    # status, no red anything. The client watches a spinner forever and it looks
+    # exactly like a model thinking hard.
+    #
+    # So each worker beats a key with a TTL, and /healthz reports a worker as
+    # dead once its key expires. A platform health check then restarts the
+    # container instead of routing traffic into a black hole.
+
+    HEARTBEAT_TTL_SECONDS = 45
+
+    @staticmethod
+    def _heartbeat_key(topic: str) -> str:
+        return f"df:worker:heartbeat:{topic}"
+
+    def beat(self, topic: str) -> None:
+        """Refresh this worker's liveness key. Cheap enough to call every poll.
+
+        TTL is ~9x the 5s poll interval, so a worker busy with one slow
+        inference (B7 on CPU is ~0.3-3s per face, and a batch of eight took
+        5.1s) is not reported dead for being slow. Liveness, not latency.
+        """
+        try:
+            self.r.set(
+                self._heartbeat_key(topic), str(time.time()),
+                ex=self.HEARTBEAT_TTL_SECONDS,
+            )
+        except Exception:
+            # A heartbeat failure must never take down a worker that is
+            # otherwise fine. Redis being unreachable will surface through the
+            # queue on the next poll anyway, which is the honest signal.
+            log.warning("heartbeat failed for topic=%s", topic, exc_info=True)
+
+    def worker_alive(self, topic: str) -> bool:
+        return bool(self.r.exists(self._heartbeat_key(topic)))
+
     def publish(self, job_id: str, status: str, **extra: Any) -> dict:
         """Write the key, then publish. Order matters: a client that gets the
         push and immediately polls must not read a staler value than the push.
