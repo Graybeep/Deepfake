@@ -632,6 +632,49 @@ EXTRACT_FACE_WITNESS = (
     "      [cv2.imdecode(np.frombuffer(c.data, np.uint8), cv2.IMREAD_COLOR).shape[:2] for c in cs])"
 )
 
+GATE_WITNESS = (
+    "import os; os.environ['DF_MIN_DETECTION_CONFIDENCE'] = '0.5';"
+    "from df.pipelines.extract import FaceCrop;"
+    "import df.workers.cpu_preprocess as cp;"
+    "from df.config import Settings; cp.settings = Settings();"
+    "c = lambda i, k: FaceCrop(frame_index=0, face_index=i, data=b'x',"
+    "                          confidence=k, bbox=(1, 1, 120, 120));"
+    "d = [];"
+    "kept = cp._gate_detections([c(0, 0.97), c(1, 0.32)], d, frame_index=0);"
+    "print([x.face_index for x in kept], [(y['face_index'], y['confidence']) for y in d])"
+)
+
+GATE_MUTATIONS = [
+    Mutation(
+        # No gate at all: junk reaches the model, as it did before.
+        label="detection gate disabled",
+        file="src/df/workers/cpu_preprocess.py",
+        old="        if crop.confidence < floor:",
+        new="        if False:",
+        witness=GATE_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # Gate, but drop silently -- the 2026-08-30 bug, reintroduced. The
+        # crop never reaches the model AND leaves no trace for a dispute.
+        label="gated detections not recorded",
+        file="src/df/workers/cpu_preprocess.py",
+        old="            discarded.append({",
+        new="            _ = ({",
+        witness=GATE_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # Inverted: keep the junk, drop the good detections.
+        label="gate inverted (keeps only low confidence)",
+        file="src/df/workers/cpu_preprocess.py",
+        old="        if crop.confidence < floor:",
+        new="        if crop.confidence >= floor:",
+        witness=GATE_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+]
+
 ZERO_ITEM_WITNESS = (
     # Drives the real router handler with a job that has no item rows and
     # prints what lands on the audit row. Behavioural, not source-inspecting:
@@ -740,3 +783,7 @@ if __name__ == "__main__":
     print("\nzero-item attribution")
     z_bad = run_all(ZERO_ITEM_MUTATIONS)
     print(f"  {len(ZERO_ITEM_MUTATIONS)} mutation(s), {z_bad} did not produce RED")
+
+    print("\ndetection gate")
+    g_bad = run_all(GATE_MUTATIONS)
+    print(f"  {len(GATE_MUTATIONS)} mutation(s), {g_bad} did not produce RED")

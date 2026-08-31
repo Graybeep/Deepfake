@@ -114,6 +114,26 @@ class Settings:
     # sampling
     video_fps_sample: float = field(default_factory=lambda: _float("DF_VIDEO_FPS_SAMPLE", 2.0))
     video_max_frames: int = field(default_factory=lambda: _int("DF_VIDEO_MAX_FRAMES", 300))
+    # Detection-confidence floor. Boxes below this never reach the model.
+    #
+    # UNTUNED, and chosen under deadline pressure from n=1 example: a public-
+    # domain portrait where Haar returned one real face at 0.97 and two
+    # artefacts at 0.32 and 0.08, and the 0.32 artefact set the whole verdict.
+    # 0.3 sits between those observations and nothing more principled than that.
+    #
+    # It gates rather than reweights on purpose. A non-face region entering the
+    # model produces an arbitrary number, and averaging an arbitrary number with
+    # a real one is not more principled than taking the max of them -- just less
+    # alarming. Worst-case rollup over survivors is preserved, because one
+    # manipulated face is what makes an image manipulated, and any averaging
+    # across faces trades a visible false positive for invisible false negatives
+    # on exactly the case this tool exists for.
+    #
+    # Discarded detections are RECORDED (preprocess.complete event, and surfaced
+    # per-face in the API), never silently dropped.
+    min_detection_confidence: float = field(
+        default_factory=lambda: _float("DF_MIN_DETECTION_CONFIDENCE", 0.3)
+    )
     audio_chunk_seconds: float = field(
         default_factory=lambda: _float("DF_AUDIO_CHUNK_SECONDS", 3.0)
     )

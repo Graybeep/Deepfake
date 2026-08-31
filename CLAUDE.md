@@ -47,6 +47,28 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   the STUB extractor (0.6/0.7/0.8 by construction), so "the weights genuinely
   differ" has never been observed on the real path, and `min_confidence` has
   never been tuned against it. Waits on the same labelled set as calibration.
+- **Detection is GATED, not reweighted** (`DF_MIN_DETECTION_CONFIDENCE`, default
+  0.3). Boxes below the floor never reach the model; worst-case rollup over the
+  survivors is unchanged. Both halves matter:
+  A non-face region entering the model returns an arbitrary number, and there is
+  no principled way to combine an arbitrary number with a real one — averaging it
+  is not better than maxing it, only less alarming. So the repair belongs where
+  the junk enters, not downstream.
+  And **do not replace worst-case with a mean across faces.** One manipulated
+  face is what makes an image manipulated; a confidence-weighted mean would drag
+  a swapped face's score toward the crowd in a group photo, trading a visible
+  false positive for invisible false negatives on exactly the case this tool
+  exists for. That was proposed on 2026-08-31 and correctly rejected — it was
+  also underspecified about whether the class came from worst-case or from the
+  banded aggregate, which is the part that decides whether it works at all.
+  Gated detections are **recorded** (`preprocess.complete` event, surfaced
+  per-face by the API) — `job_items` cannot hold them because `score` is NOT NULL
+  and they were never scored.
+  **The 0.3 default is untuned.** Evidence base is one public-domain portrait:
+  real face 0.97 scoring 0.54, artefacts at 0.32 and 0.08, and the 0.32 artefact
+  scored 55.79 and made the whole image `uncertain`. **0.3 does not catch 0.32.**
+  0.5 does, verified end to end, but is a constant fitted to n=1. The real repair
+  is a detector that returns a genuine detection probability (RetinaFace/SCRFD).
 - The extractor no longer drops low-confidence faces itself. It did, below 0.3,
   which broke the stated rule that dropped items are "still recorded in
   job_items -- dropped, not deleted, so the audit trail shows what was ignored":

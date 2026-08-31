@@ -365,7 +365,10 @@ def get_job(job_id: str, request: Request) -> JSONResponse:
     # and a consumer can apply its own bar. There is deliberately no per-face
     # threshold here; see df.rollup.face_evidence.
     if job["media_type"] in {"video", "image"} and job["status"] == "complete":
-        doc["face_evidence"] = face_evidence(_db.get_items(job_id))
+        doc["face_evidence"] = face_evidence(
+            _db.get_items(job_id),
+            discarded=_db.get_discarded_detections(job_id),
+        )
 
     if live and live.get("status"):
         # Redis is ahead of Postgres between a transition and its commit.

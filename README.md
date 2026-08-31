@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-241 tests, no infrastructure required. The suite covers the two pipeline rules
+246 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -142,10 +142,36 @@ no-op.
 
 **Detection confidence is uncalibrated.** Haar's reject level is an unbounded
 internal cascade score, not a probability; it is squashed to 0–1 by dividing by
-10, which is arbitrary and monotone and nothing more. It becomes the aggregation
-weight, so it is load-bearing. Every confidence distribution measured in this
-repo so far came from the *stub* extractor, so "the weights genuinely differ"
-has never been observed on the real path.
+10, which is arbitrary and monotone and nothing more.
+
+**It gates rather than reweights.** Detections below
+`DF_MIN_DETECTION_CONFIDENCE` (default `0.3`) are dropped before they reach the
+model, and worst-case rollup over the survivors is unchanged.
+
+Both halves of that are deliberate. Gating, because a non-face region entering
+the model returns an arbitrary number and there is no principled way to combine
+an arbitrary number with a real one — averaging it is not better than maxing it,
+only less alarming. Worst-case preserved, because one manipulated face is what
+makes an image manipulated; a confidence-weighted mean across faces would drag a
+swapped face's score toward the crowd in a group photo, trading a visible false
+positive for **invisible false negatives** on precisely the case the tool exists
+for.
+
+**What is gated is recorded.** An earlier version of this gate lived inside the
+extractor and was removed because an extraction-time drop left no row and no
+count. It now writes to the `preprocess.complete` event and is surfaced per-face
+by the API, so a reader sees `discarded, 32% confidence` rather than nothing.
+(`job_items` cannot hold them: `score` is `NOT NULL`, and these were never
+scored.)
+
+**The 0.3 default is untuned and fitted to nothing.** Measured on one
+public-domain portrait: Haar returned the real face at 0.97 (scoring 0.54,
+authentic) plus artefacts at 0.32 and 0.08 — and the 0.32 artefact scored 55.79,
+which worst-case rollup turned into `uncertain` for the whole image. **0.3 does
+not catch 0.32.** Raising it to 0.5 fixes that one image (verified: gated,
+recorded, verdict corrected to `likely_authentic` at 0.54) but would be fitting a
+constant to a single example. The real repair is a detector returning an actual
+detection probability — RetinaFace/SCRFD — not a better guess at this number.
 
 ## Run the full service
 

@@ -51,7 +51,11 @@ def rollup_items(rows: list[dict[str, Any]]) -> tuple[list[ScoredItem], int]:
 MAX_REPORTED_FACES = 10
 
 
-def face_evidence(rows: list[dict[str, Any]], limit: int = MAX_REPORTED_FACES) -> dict:
+def face_evidence(
+    rows: list[dict[str, Any]],
+    limit: int = MAX_REPORTED_FACES,
+    discarded: dict[str, Any] | None = None,
+) -> dict:
     """Per-face detail behind a rolled-up label, as an array rather than a scalar.
 
     The worst-case rollup is a lossy reduction: N faces become one number and
@@ -77,7 +81,16 @@ def face_evidence(rows: list[dict[str, Any]], limit: int = MAX_REPORTED_FACES) -
     ranked = sorted(faces, key=lambda r: r["score"], reverse=True)
     sized = [r for r in faces if r.get("face_w") is not None]
 
+    disc = discarded or {}
     return {
+        # Detections the confidence floor rejected before they reached the
+        # model. Reported rather than hidden: a reader seeing "discarded, 32%
+        # confidence" can tell a gated artefact from a face that scored low,
+        # and those are very different facts. NULL-ish (absent) when nothing
+        # recorded it, which is not the same as "none were discarded".
+        "detections_discarded": disc.get("detections_discarded"),
+        "min_detection_confidence": disc.get("min_detection_confidence"),
+        "discarded_faces": disc.get("discarded") or [],
         "faces_total": len(faces),
         "faces_reported": min(len(ranked), limit),
         # How many of those faces carry a recorded size. Every row written

@@ -100,6 +100,13 @@ class FakeDb:
             seen.add(key)
             existing.append(row)
 
+    def get_discarded_detections(self, job_id: str) -> dict:
+        """Mirrors the real read: latest preprocess.complete detail, or {}."""
+        for jid, event, detail in reversed(self.events):
+            if jid == job_id and event == "preprocess.complete":
+                return detail or {}
+        return {}
+
     def item_calibrations(self, job_id: str) -> list[str]:
         """Mirrors the real DISTINCT query, NULLs dropped."""
         return sorted({

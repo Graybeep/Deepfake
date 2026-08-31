@@ -169,6 +169,25 @@ class Db:
             ).fetchall()
         return [r["calibration"] for r in rows]
 
+    def get_discarded_detections(self, job_id: str) -> dict[str, Any]:
+        """What the detection-confidence floor rejected, from the audit trail.
+
+        Read from job_events rather than job_items because these were never
+        scored: job_items.score is NOT NULL, so a row would have to invent a
+        score for a crop the model never saw. The event is the permanent record.
+
+        Returns {} when nothing was recorded -- a pre-gate job, which is not the
+        same claim as "nothing was discarded".
+        """
+        with self.conn() as c:
+            row = c.execute(
+                "SELECT detail FROM job_events "
+                "WHERE job_id = %s AND event = 'preprocess.complete' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return (row or {}).get("detail") or {}
+
     def get_items(self, job_id: str) -> list[dict[str, Any]]:
         with self.conn() as c:
             return c.execute(

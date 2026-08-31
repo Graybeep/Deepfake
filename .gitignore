@@ -10,3 +10,7 @@ data/
 models/weights/
 .DS_Store
 .mutate-pycache/
+
+# Presentation deck: deliberately untracked (owner asked it stay out of git).
+Deepfake-Detection-Progress-Review.pptx
+*.pptx

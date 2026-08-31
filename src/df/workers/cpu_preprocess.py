@@ -16,6 +16,7 @@ import hashlib
 import logging
 
 from df import storage as storage_mod
+from df.config import settings
 from df.db import Db
 from df.jobstatus import JobStatus
 from df.pipelines.extract import build_audio_chunker, build_face_extractor, build_frame_sampler
@@ -39,6 +40,47 @@ def _face_size(crop) -> dict:
     return {"face_w": int(w), "face_h": int(h)}
 
 
+
+def _gate_detections(crops: list, discarded: list, *, frame_index: int) -> list:
+    """Drop detections the detector itself is not confident in, and RECORD them.
+
+    Gating here -- before the crop is stored and before it reaches the model --
+    rather than reweighting downstream. The reason is that a non-face region
+    entering the model produces an arbitrary number, and there is no principled
+    way to combine an arbitrary number with a real one. Averaging it is not
+    better than taking the max of it, only less alarming.
+
+    Measured 2026-08-31 on a public-domain portrait: Haar returned the real face
+    at confidence 0.97 scoring 0.54 (authentic), plus two artefacts at 0.32 and
+    0.08. The 0.32 artefact scored 55.79 and, through worst-case rollup, set the
+    verdict for the whole image to `uncertain`. The real face was never the
+    problem; a non-face crop was.
+
+    Worst-case rollup over the survivors is deliberately unchanged. One
+    manipulated face is what makes an image manipulated, so averaging across
+    faces would trade this visible false positive for invisible false negatives
+    on precisely the case the detector exists for.
+
+    This restores, with a record, the gate that was removed on 2026-08-30 for
+    leaving no trace. The detections are not silently dropped: they land in the
+    preprocess.complete event and are surfaced per-face by the API, so a reader
+    sees "discarded, 32% confidence" rather than nothing at all.
+    """
+    floor = settings.min_detection_confidence
+    kept = []
+    for crop in crops:
+        if crop.confidence < floor:
+            discarded.append({
+                "frame_index": frame_index,
+                "face_index": crop.face_index,
+                "confidence": round(float(crop.confidence), 6),
+                **_face_size(crop),
+            })
+            continue
+        kept.append(crop)
+    return kept
+
+
 def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, status: JobStatus) -> None:
     job_id = msg.payload["job_id"]
     media_type = msg.payload["media_type"]
@@ -55,12 +97,17 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
 
     prefix = storage_mod.derived_prefix(job_id)
     manifest: list[dict] = []
+    # Detections the confidence floor rejected. Recorded, not dropped.
+    discarded: list[dict] = []
 
     if media_type == "video":
         sampler = build_frame_sampler()
         extractor = build_face_extractor()
         for frame in sampler.sample(raw):
-            for crop in extractor.extract(frame.data, frame_index=frame.index):
+            for crop in _gate_detections(
+                extractor.extract(frame.data, frame_index=frame.index),
+                discarded, frame_index=frame.index,
+            ):
                 key = f"{prefix}items/f{frame.index:05d}_x{crop.face_index}.png"
                 storage.put_bytes(key, crop.data, "image/png")
                 manifest.append({
@@ -75,7 +122,9 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
 
     elif media_type == "image":
         extractor = build_face_extractor()
-        for crop in extractor.extract(raw, frame_index=0):
+        for crop in _gate_detections(
+            extractor.extract(raw, frame_index=0), discarded, frame_index=0
+        ):
             key = f"{prefix}items/i00000_x{crop.face_index}.png"
             storage.put_bytes(key, crop.data, "image/png")
             manifest.append({
@@ -102,6 +151,12 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
         "content_hash": content_hash,
         "items": len(manifest),
         "media_type": media_type,
+        # The audit record for what the confidence floor rejected. job_items
+        # cannot hold these -- score is NOT NULL and these were never scored, so
+        # a row would have to invent one. This event is the permanent trace.
+        "detections_discarded": len(discarded),
+        "min_detection_confidence": settings.min_detection_confidence,
+        "discarded": discarded[:50],
     })
 
     # An empty manifest is a legitimate outcome (0 faces / no decodable audio).
