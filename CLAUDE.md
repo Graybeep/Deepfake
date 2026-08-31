@@ -24,6 +24,21 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   Audio is a separate model with its own model_version_id.
 - Aggregation default: weighted/trimmed mean over per-frame or per-chunk scores,
   weighted down by detection/alignment confidence. Never plain mean.
+- **"Could not decode" is NOT the same verdict as "no face found."** They were
+  indistinguishable until 2026-08-31: an undecodable upload produced zero items
+  and routed to `undetermined` exactly as an empty room would. The likeliest
+  case made it worst — a phone camera roll is HEIC, OpenCV has no HEIF codec
+  (`measured: yes`: JPEG/PNG/WEBP only), so someone uploading a picture of their
+  own face was told no face was found in it. Confidently wrong, and nothing
+  looked broken. `decode_image()` now falls back to pillow-heif and the CPU
+  worker records the sniffed format plus a `decodable` flag; the API raises a
+  `MEDIA NOT DECODED` advisory that says the result means *not analysed*.
+  EXIF orientation needs no fix on the OpenCV path — `cv2.imdecode` honours it
+  (`measured: yes`) — but the pillow-heif branch does not, so it transposes.
+  Guard `decode_image` with ONE mechanism, not two: an explicit empty-buffer
+  check alongside the `cv2.error` handler made every single-line mutation a
+  no-op, so the "never raises" invariant was untestable. Two mechanisms guarding
+  one property meant neither was checked.
 - Face Extraction returning 0 faces → `undetermined` class. Never silently default
   into real/fake. **And credit no model for it.** With zero item rows nothing
   produced the (absent) score, so `model_version_id` is NULL rather than the

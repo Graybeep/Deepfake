@@ -27,7 +27,8 @@ RUN apt-get update \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir opencv-python-headless==4.10.0.84 librosa==0.10.2.post1
+ && pip install --no-cache-dir opencv-python-headless==4.10.0.84 librosa==0.10.2.post1 \
+ && pip install --no-cache-dir pillow-heif==0.18.0
 
 COPY src/ ./src/
 

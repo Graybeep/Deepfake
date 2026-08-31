@@ -46,7 +46,7 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/python -m pytest
 ```
 
-261 tests, no infrastructure required. The suite covers the two pipeline rules
+277 tests, no infrastructure required. The suite covers the two pipeline rules
 that must never be relaxed (0 faces ⇒ undetermined, >1 face ⇒ worst-case
 rollup), aggregation, band routing, the rate limiter, DLQ behaviour, that **TTL
 deletion actually deletes**, and that **the hold flag blocks every delete path
@@ -190,6 +190,26 @@ the whole image `uncertain`. After: `likely_authentic`, `0.54`, with
 `0.4` is still a chosen number, chosen on failure asymmetry rather than evidence.
 The real repair is a detector returning a genuine detection probability —
 RetinaFace/SCRFD — not a better constant here.
+
+### Phone uploads
+
+**HEIC works.** A phone camera roll is HEIC by default and OpenCV has no HEIF
+codec at all (`measured: yes`: its build lists JPEG, PNG, WEBP only), so
+`cv2.imdecode` returned `None`, extraction returned no faces, and the job
+completed as `undetermined` — the service told you no face was found in a photo
+of your face. `decode_image()` now falls back to `pillow-heif`. Verified end to
+end: a real HEIC uploaded as `IMG_0042.HEIC` decodes, the face is found and
+scored `0.55`, `likely_authentic`.
+
+**EXIF orientation needs no handling on the OpenCV path.** `cv2.imdecode`
+honours it (`measured: yes`: a 300×100 image tagged `orientation=6` decodes as
+100×300), so a sideways phone photo arrives upright. The `pillow-heif` branch
+does *not* get that for free, so it calls `exif_transpose` explicitly.
+
+**"Could not decode" is reported separately from "no face found."** Those are
+different facts and were previously the same response. An undecodable upload now
+carries a `MEDIA NOT DECODED` advisory naming the sniffed format and stating
+that the result means *not analysed*, not *no face present*.
 
 ### Score bands
 

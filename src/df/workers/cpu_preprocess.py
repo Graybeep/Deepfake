@@ -19,7 +19,13 @@ from df import storage as storage_mod
 from df.config import settings
 from df.db import Db
 from df.jobstatus import JobStatus
-from df.pipelines.extract import build_audio_chunker, build_face_extractor, build_frame_sampler
+from df.pipelines.extract import (
+    build_audio_chunker,
+    build_face_extractor,
+    build_frame_sampler,
+    decode_image,
+    sniff_format,
+)
 from df.queue import TOPIC_INFERENCE, TOPIC_PREPROCESS, Message, Queue, build_queue
 from df.workers.loop import run_worker
 
@@ -120,6 +126,8 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     content_hash = hashlib.sha256(raw).hexdigest()
     db.set_content_hash(job_id, content_hash)
 
+    media_format = sniff_format(raw)
+    sampled_any = True   # images decide decodability by the decoder, not sampling
     prefix = storage_mod.derived_prefix(job_id)
     manifest: list[dict] = []
     # Detections the confidence floor rejected. Recorded, not dropped.
@@ -128,7 +136,9 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     if media_type == "video":
         sampler = build_frame_sampler()
         extractor = build_face_extractor()
-        for frame in sampler.sample(raw):
+        frames = sampler.sample(raw)
+        sampled_any = bool(frames)
+        for frame in frames:
             for crop in _gate_detections(
                 extractor.extract(frame.data, frame_index=frame.index),
                 discarded, frame_index=frame.index,
@@ -160,7 +170,9 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
 
     elif media_type == "audio":
         chunker = build_audio_chunker()
-        for chunk in chunker.chunk(raw):
+        chunks = chunker.chunk(raw)
+        sampled_any = bool(chunks)
+        for chunk in chunks:
             key = f"{prefix}items/c{chunk.index:05d}.png"
             storage.put_bytes(key, chunk.spectrogram, "image/png")
             manifest.append({
@@ -172,6 +184,20 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     else:
         raise ValueError(f"unknown media_type {media_type!r}")
 
+    # Did anything read the bytes at all? Distinct from "read them and found no
+    # face", which is a legitimate `undetermined`. For images the decoder is the
+    # authority; for video and audio, producing zero frames/chunks from a
+    # non-empty upload is the same signal.
+    if media_type == "image":
+        decodable = decode_image(raw) is not None
+    else:
+        decodable = bool(sampled_any)
+    if not decodable:
+        log.warning(
+            "job=%s could not decode %s (format=%s); reporting undetermined with a reason",
+            job_id, media_type, media_format,
+        )
+
     db.record_event(job_id, "preprocess.complete", {
         "content_hash": content_hash,
         "items": len(manifest),
@@ -179,6 +205,13 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
         # The audit record for what the confidence floor rejected. job_items
         # cannot hold these -- score is NOT NULL and these were never scored, so
         # a row would have to invent one. This event is the permanent trace.
+        # What the bytes actually were, and whether anything could read them.
+        # Without this, an undecodable upload produces zero items and the job
+        # reports `undetermined` -- indistinguishable from a photo with nobody
+        # in it. A judge uploading a HEIC off an iPhone would be told no face
+        # was found in a picture of their own face.
+        "media_format": media_format,
+        "decodable": decodable,
         "detections_discarded": len(discarded),
         "detection_confidence_ratio": settings.detection_confidence_ratio,
         "discarded": discarded[:50],

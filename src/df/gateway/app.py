@@ -166,6 +166,30 @@ def mark_uploaded(job_id: str, request: Request) -> dict:
     return {"job_id": job_id, "status": "queued", "enqueued": True}
 
 
+def _decode_advisories(preprocess: dict) -> list[str]:
+    """Say when nothing could be READ, rather than reporting no faces.
+
+    `undetermined` is a legitimate verdict for a photo with nobody in it. It is
+    the wrong verdict for a photo the service could not open, and the two were
+    indistinguishable: an undecodable upload produced zero items and routed to
+    `undetermined` exactly as an empty room would.
+
+    That mattered most in the likeliest case. A phone camera roll is HEIC by
+    default, OpenCV has no HEIF codec at all (`measured: yes` 2026-08-31 -- its
+    build lists JPEG, PNG and WEBP only), so someone uploading a picture of their
+    own face was told no face was found in it. A confidently wrong answer, and
+    nothing about it looked broken.
+    """
+    if preprocess.get("decodable") is not False:
+        return []
+    fmt = preprocess.get("media_format") or "unknown"
+    return [
+        f"MEDIA NOT DECODED: the upload was detected as {fmt!r}, which this "
+        "service could not open, so no faces were examined. This result means "
+        "'not analysed', NOT 'no face present'. Re-upload as JPEG or PNG."
+    ]
+
+
 def _calibration_advisories(job: dict) -> list[str]:
     """Caveat about the SCALE of the number, not the trustworthiness of the
     weights. FAILS CLOSED, like its neighbour.
@@ -266,7 +290,7 @@ def _coverage(job: dict) -> float | None:
     return round(used / total, 4)
 
 
-def _public_job(job: dict) -> dict:
+def _public_job(job: dict, _preprocess: dict | None = None) -> dict:
     doc = {
         "job_id": str(job["id"]),
         "media_type": job["media_type"],
@@ -325,6 +349,7 @@ def _public_job(job: dict) -> dict:
     # that is true of most of the job, not all of it, and saying so is cheaper
     # than letting the id imply more than was observed.
     doc["advisories"].extend(_calibration_advisories(job))
+    doc["advisories"].extend(_decode_advisories(_preprocess or {}))
     if job.get("items_unattributed"):
         doc["advisories"].append(
             f"PARTIAL PROVENANCE: {job['items_unattributed']} of this job's "
@@ -352,7 +377,8 @@ def get_job(job_id: str, request: Request) -> JSONResponse:
     if job is None:
         raise HTTPException(404, "job not found")
 
-    doc = _public_job(job)
+    preprocess = _db.get_discarded_detections(job_id)
+    doc = _public_job(job, preprocess)
 
     # Per-face detail behind a rolled-up label. Read from job_items rather than
     # denormalised onto the job row: those rows ARE the audit trail, they
@@ -366,8 +392,7 @@ def get_job(job_id: str, request: Request) -> JSONResponse:
     # threshold here; see df.rollup.face_evidence.
     if job["media_type"] in {"video", "image"} and job["status"] == "complete":
         doc["face_evidence"] = face_evidence(
-            _db.get_items(job_id),
-            discarded=_db.get_discarded_detections(job_id),
+            _db.get_items(job_id), discarded=preprocess
         )
 
     if live and live.get("status"):

@@ -11,5 +11,11 @@ torchvision==0.20.1
 # module.fc, and torchvision's EfficientNet uses features.*/classifier.* -- the
 # two do not overlap at all. See src/df/inference/efficientnet.py.
 timm==1.0.11
+# A phone camera roll is HEIC by default and OpenCV has no HEIF codec at all
+# (`measured: yes` 2026-08-31: its build lists JPEG, PNG, WEBP only). Without
+# this, an iPhone upload decodes to nothing and the job reports "no faces" for a
+# photo of a face. PIL will not open HEIC either until pillow_heif registers its
+# opener, which is what the import in decode_image() is for.
+pillow-heif==0.18.0
 opencv-python-headless==4.10.0.84
 librosa==0.10.2.post1

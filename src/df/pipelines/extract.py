@@ -179,6 +179,105 @@ class StubAudioChunker:
         ]
 
 
+# --- format sniffing -------------------------------------------------------
+
+# Magic bytes, because the client's declared content type is its own word and a
+# phone upload frequently mislabels. Only what we can act on.
+_MAGIC = (
+    (bytes([0xFF, 0xD8, 0xFF]), "jpeg"),
+    (bytes([137, 80, 78, 71, 13, 10, 26, 10]), "png"),
+    (b"RIFF", "webp-or-wav"),
+    (b"GIF8", "gif"),
+    (b"BM", "bmp"),
+)
+# ISO-BMFF brands live at offset 4 after 'ftyp'. HEIC and AVIF are the ones a
+# phone actually produces.
+_FTYP_BRANDS = {
+    b"heic": "heic", b"heix": "heic", b"hevc": "heic", b"heim": "heic",
+    b"heis": "heic", b"hevm": "heic", b"mif1": "heic", b"msf1": "heic",
+    b"avif": "avif", b"avis": "avif",
+    b"mp42": "mp4", b"isom": "mp4", b"iso2": "mp4", b"qt  ": "mov",
+}
+
+
+def sniff_format(raw: bytes) -> str:
+    """Identify the container from magic bytes. "unknown" when unrecognised.
+
+    Exists so a failure to DECODE can be reported as what it is. Without it an
+    undecodable upload returns zero faces, which the pipeline then reports as
+    `undetermined` -- indistinguishable from a photo with nobody in it. A judge
+    uploading a HEIC straight off an iPhone would be told no face was found in a
+    picture of their own face, which is a confidently wrong answer rather than a
+    visible failure. Worse than a crash, because nothing looks broken.
+    """
+    if len(raw) < 12:
+        return "unknown"
+    if raw[4:8] == b"ftyp":
+        return _FTYP_BRANDS.get(raw[8:12].lower(), "iso-bmff")
+    for magic, name in _MAGIC:
+        if raw.startswith(magic):
+            return name
+    return "unknown"
+
+
+# Formats this service can decode. HEIC/AVIF are absent from OpenCV's codec
+# list (`measured: yes` 2026-08-31: JPEG, PNG, WEBP only) and are handled by
+# the pillow-heif fallback in `decode_image` when it is installed.
+DECODABLE_IMAGE_FORMATS = frozenset({"jpeg", "png", "webp-or-wav", "gif", "bmp"})
+
+
+def decode_image(raw: bytes):
+    """Decode to a BGR array, or None. Tries OpenCV, then pillow-heif.
+
+    OpenCV honours EXIF orientation for JPEG (`measured: yes` 2026-08-31: a
+    300x100 image tagged orientation=6 decodes as 100x300), so no separate
+    transpose is needed on that path -- a phone photo stored sideways comes back
+    upright and Haar sees a face the right way up.
+
+    The pillow-heif branch exists because a phone camera roll is HEIC by default
+    and OpenCV cannot read it at all. PIL does not decode HEIC unless
+    pillow_heif registers its opener, so that registration is the whole point of
+    the import.
+    """
+    import cv2
+    import numpy as np
+
+    try:
+        arr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    except cv2.error:
+        # cv2.imdecode ASSERTS on an empty buffer ("!buf.empty()") rather than
+        # returning None, so a zero-byte upload would take the worker down. It
+        # returns None for merely malformed bytes, so this handler is the only
+        # thing covering the empty case.
+        #
+        # There was an explicit `if not raw: return None` here too. It was
+        # removed as redundant: the handler covers empty AND malformed, and with
+        # both present no single mutation could change the behaviour, so the
+        # mutation harness withheld a verdict and the invariant went untested.
+        # Two mechanisms guarding one property meant neither was checkable.
+        arr = None
+    if arr is not None:
+        return arr
+
+    try:
+        import io
+
+        import pillow_heif
+        from PIL import Image, ImageOps
+
+        pillow_heif.register_heif_opener()
+        img = Image.open(io.BytesIO(raw))
+        # PIL does NOT apply orientation on open, unlike cv2, so this transpose
+        # is required on this branch specifically.
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    except Exception:
+        # Undecodable by every route available. The caller reports the sniffed
+        # format so the reason is legible instead of being flattened into
+        # "no faces found".
+        return None
+
+
 # --- real implementations (lazy heavy imports) -----------------------------
 
 
@@ -263,7 +362,7 @@ class OpenCVFaceExtractor:
         import cv2
         import numpy as np
 
-        arr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        arr = decode_image(image_bytes)
         if arr is None:
             return []
 

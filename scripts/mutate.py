@@ -632,6 +632,63 @@ EXTRACT_FACE_WITNESS = (
     "      [cv2.imdecode(np.frombuffer(c.data, np.uint8), cv2.IMREAD_COLOR).shape[:2] for c in cs])"
 )
 
+DECODE_WITNESS = (
+    "import cv2, numpy as np;"
+    "from df.pipelines.extract import decode_image, sniff_format;"
+    "from df.gateway.app import _decode_advisories as adv;"
+    "img = np.zeros((40, 60, 3), np.uint8);"
+    "jpg = cv2.imencode('.jpg', img)[1].tobytes();"
+    "heic = bytes(4) + b'ftypheic' + bytes(16);"
+    "print(sniff_format(heic), sniff_format(jpg),"
+    "      decode_image(jpg) is not None, decode_image(b'') is None,"
+    "      len(adv({'decodable': False, 'media_format': 'heic'})),"
+    "      len(adv({'decodable': True})), len(adv({})))"
+)
+
+DECODE_MUTATIONS = [
+    Mutation(
+        # HEIC misidentified -- the reason a judge would be told "no face".
+        label="ftyp brands not recognised (heic reads as unknown)",
+        file="src/df/pipelines/extract.py",
+        old='    if raw[4:8] == b"ftyp":',
+        new="    if False:",
+        witness=DECODE_WITNESS,
+        test="tests/test_media_decoding.py",
+    ),
+    Mutation(
+        # The only thing standing between an empty upload and a dead worker.
+        # An explicit empty-buffer guard used to sit alongside this; it was
+        # removed precisely because two mechanisms guarding one property made
+        # the property untestable -- every single-line mutation was a no-op
+        # and the harness rightly refused a verdict.
+        label="cv2.error not handled (empty upload crashes the worker)",
+        file="src/df/pipelines/extract.py",
+        old="    except cv2.error:",
+        new="    except ZeroDivisionError:",
+        witness=DECODE_WITNESS,
+        test="tests/test_media_decoding.py",
+    ),
+    Mutation(
+        # Fail open: an undecodable upload reports nothing, so the result
+        # reads as "no face present" rather than "not analysed".
+        label="undecodable upload reported silently",
+        file="src/df/gateway/app.py",
+        old='    if preprocess.get("decodable") is not False:',
+        new="    if True:",
+        witness=DECODE_WITNESS,
+        test="tests/test_media_decoding.py",
+    ),
+    Mutation(
+        # Absent treated as False: every pre-gate job gets a false warning.
+        label="missing decodability treated as undecodable",
+        file="src/df/gateway/app.py",
+        old='    if preprocess.get("decodable") is not False:',
+        new='    if preprocess.get("decodable"):',
+        witness=DECODE_WITNESS,
+        test="tests/test_media_decoding.py",
+    ),
+]
+
 GATE_WITNESS = (
     # Three probes, each discriminating a different mutation:
     #  A: the measured portrait -- does the artefact gate at all?
@@ -803,6 +860,10 @@ if __name__ == "__main__":
     print("\nzero-item attribution")
     z_bad = run_all(ZERO_ITEM_MUTATIONS)
     print(f"  {len(ZERO_ITEM_MUTATIONS)} mutation(s), {z_bad} did not produce RED")
+
+    print("\nmedia decoding")
+    d_bad = run_all(DECODE_MUTATIONS)
+    print(f"  {len(DECODE_MUTATIONS)} mutation(s), {d_bad} did not produce RED")
 
     print("\ndetection gate")
     g_bad = run_all(GATE_MUTATIONS)
