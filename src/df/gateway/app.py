@@ -403,7 +403,7 @@ async def receive_upload(
     request: Request,
     key: str = Form(...),
     file: UploadFile = File(...),
-) -> JSONResponse:
+) -> Response:
     """Accept an upload for the LocalDiskStorage backend.
 
     Only reachable when DF_S3_ENDPOINT is a file:// URL. With S3 or MinIO the
@@ -440,7 +440,11 @@ async def receive_upload(
         chunks.append(chunk)
 
     _storage.put_bytes(key, b"".join(chunks), file.content_type or "application/octet-stream")
-    return JSONResponse(status_code=204, content=None)
+    # Bare Response, NOT JSONResponse. A 204 must have no body, and
+    # JSONResponse(content=None) serialises the four bytes "null" -- starlette
+    # then raises "Response content longer than Content-Length" and the request
+    # fails after the bytes have already been stored. Seen in the deployed logs.
+    return Response(status_code=204)
 
 
 @app.get("/v1/jobs/{job_id}")

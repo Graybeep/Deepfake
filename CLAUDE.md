@@ -156,8 +156,15 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   persistence is configured — `measured: yes` 2026-08-18, a default `redis:7-alpine`
   has `appendonly no` but RDB `save` points on, so an unconfigured restart loses up to
   the last snapshot window (an hour under low write volume), not everything. AOF
-  `everysec` is set in compose and `assert_persistence_enabled()` refuses to boot
-  without it — but note what that buys: `measured: yes`, a SIGKILL of the Redis
+  `everysec` is set in compose. **CORRECTED 2026-09-01: `assert_persistence_enabled()`
+  does NOT refuse to boot without AOF.** It accepts AOF *or* RDB, and it returns
+  quietly when `CONFIG GET` is unavailable at all, which is common on managed
+  Redis. `measured: yes` — Railway's managed Redis reports `aof=False rdb=True`
+  and the stack boots fine. That policy is defensible; it is not what this file
+  claimed. The difference is operational: on RDB-only a restart can lose up to
+  the last save window rather than ~1s. The guard catches "no persistence at
+  all", not "not the persistence we specified".
+  Note what AOF buys where it IS on: `measured: yes`, a SIGKILL of the Redis
   process loses nothing even without fsync, because the writes are already in the
   kernel page cache. AOF is protection against host-level failure, not against a
   container restart.
