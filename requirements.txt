@@ -9,3 +9,7 @@ redis==5.2.1
 boto3==1.35.90
 numpy==2.2.1
 python-json-logger==3.2.1
+# Multipart form parsing for POST /v1/uploads, the endpoint LocalDiskStorage's
+# grant points at. Only exercised on the file:// backend -- with S3/MinIO the
+# browser uploads directly to storage and never reaches this service.
+python-multipart==0.0.20

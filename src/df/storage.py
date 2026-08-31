@@ -7,6 +7,7 @@ tests/test_retention_ttl.py.
 """
 from __future__ import annotations
 
+import pathlib
 import threading
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -198,9 +199,121 @@ class S3Storage:
         return deleted
 
 
+class LocalDiskStorage:
+    """Filesystem backend for a single-container deploy.
+
+    Exists because presigned upload needs object storage, and running MinIO as
+    an extra service on a demo platform is a moving part with no payoff when
+    every process already shares one filesystem.
+
+    THE UPLOAD PATH CHANGES SHAPE HERE, and CLAUDE.md is explicit about the
+    property being traded. With S3/MinIO the browser POSTs straight to storage,
+    so the bytes never traverse the gateway -- which is why the
+    `content-length-range` condition in the POST policy is described there as
+    the ONLY place DF_MAX_UPLOAD_BYTES can be enforced.
+
+    On local disk there is no third party to POST to, so the grant points back
+    at this service's own `/v1/uploads/{key}` endpoint. The client flow is
+    unchanged -- still "POST to upload_url with upload_fields" -- but the bytes
+    now go through the gateway. The size cap is therefore enforced directly by
+    that endpoint rather than by a signed policy, and ingress rate limiting sees
+    the upload for the first time. Different mechanism, and not weaker; but it
+    IS different from what the compose deployment does, so do not read the two
+    as interchangeable.
+
+    EPHEMERAL. A redeploy wipes this directory while the Postgres rows survive,
+    so job rows will reference media that no longer exists. That is survivable
+    only because the evidence display reads scores and per-face detail from
+    Postgres, never re-reading the image -- `media_deleted` already models media
+    disappearing, since Tier 1 deletes it on completion anyway.
+    """
+
+    def __init__(self, root: str | None = None) -> None:
+        self.root = pathlib.Path(root or settings.local_storage_root)
+        # Created at startup rather than on first write: a permission error on
+        # the first upload is indistinguishable from a broken API.
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, key: str) -> pathlib.Path:
+        # Keys are service-generated (raw/<uuid>/original, derived/<uuid>/...),
+        # never client-supplied, but resolve anyway so a future caller cannot
+        # traverse out of the root.
+        p = (self.root / key).resolve()
+        if not str(p).startswith(str(self.root.resolve())):
+            raise ValueError(f"key escapes storage root: {key!r}")
+        return p
+
+    def presign_upload(self, key: str, content_type: str, max_bytes: int) -> PresignedUpload:
+        return PresignedUpload(
+            url=f"{settings.public_base_url}/v1/uploads",
+            fields={
+                "key": key,
+                "Content-Type": content_type,
+                # Advisory only. The endpoint enforces the real limit; a client
+                # that lies simply gets a 413 instead of skipping the check.
+                "x-max-bytes": str(max_bytes),
+            },
+        )
+
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        p = self._path(key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Write-then-rename: a reader must never see a half-written crop, and
+        # the workers poll for these across processes.
+        tmp = p.with_suffix(p.suffix + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(p)
+
+    def get_bytes(self, key: str) -> bytes:
+        return self._path(key).read_bytes()
+
+    def exists(self, key: str) -> bool:
+        return self._path(key).is_file()
+
+    def list_prefix(self, prefix: str) -> list[str]:
+        base = self.root.resolve()
+        start = self._path(prefix) if not prefix.endswith("/") else self._path(prefix.rstrip("/"))
+        if not start.exists():
+            # Prefix may be a partial path rather than a directory; fall back to
+            # scanning, which is fine at demo scale.
+            return sorted(
+                str(p.relative_to(base)).replace("\\", "/")
+                for p in base.rglob("*")
+                if p.is_file() and str(p.relative_to(base)).replace("\\", "/").startswith(prefix)
+            )
+        if start.is_file():
+            return [prefix]
+        return sorted(
+            str(p.relative_to(base)).replace("\\", "/")
+            for p in start.rglob("*") if p.is_file()
+        )
+
+    def copy_object(self, src: str, dst: str) -> bool:
+        s = self._path(src)
+        if not s.is_file():
+            return False
+        self.put_bytes(dst, s.read_bytes())
+        return True
+
+    def delete_object(self, key: str) -> bool:
+        p = self._path(key)
+        if not p.is_file():
+            return False
+        p.unlink()
+        return True
+
+    def delete_prefix(self, prefix: str) -> int:
+        keys = self.list_prefix(prefix)
+        for k in keys:
+            self.delete_object(k)
+        return len(keys)
+
+
 def build_storage() -> Storage:
     if settings.s3_endpoint.startswith("memory://"):
         return InMemoryStorage()
+    if settings.s3_endpoint.startswith("file://"):
+        return LocalDiskStorage()
     return S3Storage()
 
 

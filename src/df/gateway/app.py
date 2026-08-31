@@ -14,7 +14,18 @@ import asyncio
 import json
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +46,24 @@ from df.ratelimit import RateLimiter
 log = logging.getLogger("df.gateway")
 
 app = FastAPI(title="Deepfake Detection API", version="0.1.0")
+
+# CORS. Empty by default -- same-origin only -- because a permissive default is
+# the kind of thing that ships by accident. A browser frontend on another origin
+# (a Vercel deployment calling this API) will fail CORS preflight until
+# DF_CORS_ORIGINS names it, and that failure is invisible to curl, which sends
+# no Origin header. Verify in a real browser.
+#
+# Preview deployments get their own generated hostnames, so list them or use the
+# regex form; a wildcard is not usable here because credentials are not the
+# issue but sloppiness is.
+_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 _db = Db()
 _storage: storage_mod.Storage | None = None
@@ -365,6 +394,51 @@ def _public_job(job: dict, _preprocess: dict | None = None) -> dict:
             "on completion. The window expires automatically and is not a legal hold."
         )
     return doc
+
+
+@app.post("/v1/uploads", status_code=204)
+async def receive_upload(
+    request: Request,
+    key: str = Form(...),
+    file: UploadFile = File(...),
+) -> JSONResponse:
+    """Accept an upload for the LocalDiskStorage backend.
+
+    Only reachable when DF_S3_ENDPOINT is a file:// URL. With S3 or MinIO the
+    browser POSTs straight to object storage and never touches this service --
+    see LocalDiskStorage for what that trade changes.
+
+    The shape deliberately mirrors an S3 POST policy (a `key` form field plus a
+    `file` part) so the client flow is identical either way and the frontend
+    does not need to know which backend is behind it.
+
+    The size cap is enforced HERE rather than by a signed policy condition. With
+    object storage that condition is the only enforcement point, because the
+    bytes bypass the gateway entirely; here they do not, so the check moves to
+    where they actually arrive. Streamed in chunks and aborted mid-read: reading
+    the whole body first would let an oversized upload exhaust memory before the
+    limit could be applied.
+    """
+    enforce_rate_limit(request)
+
+    if not settings.s3_endpoint.startswith("file://"):
+        raise HTTPException(404, "not found")
+    # Keys are minted by this service in POST /v1/jobs. Anything else is a
+    # client writing where it chooses.
+    if not (key.startswith("raw/") or key.startswith("derived/")):
+        raise HTTPException(400, "key not issued by this service")
+
+    limit = settings.max_upload_bytes
+    size = 0
+    chunks: list[bytes] = []
+    while chunk := await file.read(1 << 20):
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(413, f"upload exceeds {limit} bytes")
+        chunks.append(chunk)
+
+    _storage.put_bytes(key, b"".join(chunks), file.content_type or "application/octet-stream")
+    return JSONResponse(status_code=204, content=None)
 
 
 @app.get("/v1/jobs/{job_id}")

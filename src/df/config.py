@@ -143,6 +143,27 @@ class Settings:
     # 0.316/0.968 = 0.33 (gated), and a lone marginal detection is ratio 1.0
     # (kept). The real repair remains a detector that returns a genuine detection
     # probability -- RetinaFace/SCRFD -- not a better constant here.
+    # Where LocalDiskStorage keeps media when DF_S3_ENDPOINT is a file:// URL.
+    # Ephemeral on a container platform: a redeploy wipes it while Postgres rows
+    # survive, so rows may reference media that is gone. Survivable only because
+    # the evidence display reads scores from Postgres and never re-reads the
+    # image -- Tier 1 deletes the media on completion anyway.
+    local_storage_root: str = field(
+        default_factory=lambda: os.environ.get("DF_LOCAL_STORAGE_ROOT", "/data/media")
+    )
+    # Absolute base URL this service is reachable at, used to build the upload
+    # grant. On a platform deploy the container cannot know its own public
+    # hostname, and a relative URL would break a browser on a different origin.
+    public_base_url: str = field(
+        default_factory=lambda: os.environ.get("DF_PUBLIC_BASE_URL", "").rstrip("/")
+    )
+    # Browser origins allowed to call this API. Comma-separated. Empty means
+    # same-origin only, which is the safe default and also what breaks a Vercel
+    # frontend, so it must be set explicitly on deploy.
+    cors_origins: str = field(
+        default_factory=lambda: os.environ.get("DF_CORS_ORIGINS", "")
+    )
+
     detection_confidence_ratio: float = field(
         default_factory=lambda: _float("DF_DETECTION_CONFIDENCE_RATIO", 0.4)
     )
