@@ -235,6 +235,35 @@ never a silent pass-through.
 
 ---
 
+## Deploying (single container)
+
+`docker compose` is the real topology. For a demo platform there is a
+single-container image that bakes the weights and runs every process in one
+tree — see **[docs/DEPLOY.md](docs/DEPLOY.md)** for the env matrix, measured
+sizing, and an explicit list of what the trade gives up (most importantly the CPU
+worker's network isolation, which is the AV-scanning substitute).
+
+```bash
+docker build -f docker/deploy.Dockerfile -t deepfake-deploy .
+```
+
+**Weights are baked in.** The compose stack bind-mounts `./models`, which cannot
+work where there is no host filesystem — the worker hits `FileNotFoundError` at
+boot on every deploy.
+
+**Storage is local disk** (`DF_S3_ENDPOINT=file:///data/media`), so no object
+store is needed when every process shares a filesystem. The upload grant then
+points at this service's own `POST /v1/uploads` rather than at S3, and the size
+cap is enforced there instead of by a signed policy condition — the client flow
+is unchanged either way. Ephemeral: a redeploy wipes it while Postgres rows
+survive, which is survivable only because the evidence display reads from
+Postgres and never re-reads the image.
+
+**Sizing:** ≥2 GB RAM (peak RSS measured at 1541 MB), ≥1 vCPU, always-on.
+Images only — video on CPU is minutes per clip.
+
+---
+
 ## Retention
 
 - **Tier 1** — raw media and face crops are deleted when inference completes.

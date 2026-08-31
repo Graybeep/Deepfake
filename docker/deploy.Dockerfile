@@ -34,17 +34,23 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
 
-# Dependency layers first and separately, so an application code change does not
-# reinstall torch. This is the slow half of the build; keep it above COPY src/.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+# HEAVY dependency layers first, and pinned inline rather than via a file.
+# Deliberate: these have no build-context dependency, so editing
+# requirements.txt cannot invalidate them. The first version of this file
+# copied requirements.txt above the torch install, so adding one small pure-
+# Python package re-downloaded 175MB of torch. This is the slow half of the
+# build; nothing above it should change often.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
       torch==2.5.1 torchvision==0.20.1 \
  && pip install --no-cache-dir \
       timm==1.0.11 \
       opencv-python-headless==4.10.0.84 \
       librosa==0.10.2.post1 \
       pillow-heif==0.18.0
+
+# Light, fast-changing deps last.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Weights before source: they change far less often than code, so this layer
 # survives every application rebuild.
