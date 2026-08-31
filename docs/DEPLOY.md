@@ -128,7 +128,7 @@ Run in this order. Do not proceed past a failure.
 ```bash
 railway login
 railway init            # or `railway link` for an existing project
-railway up              # builds docker/deploy.Dockerfile, uploads ~254MB of context
+railway up              # builds Dockerfile, uploads ~254MB of context
 railway domain          # get the public URL
 ```
 
@@ -137,7 +137,7 @@ redeploy. `DF_PUBLIC_BASE_URL` needs the URL from `railway domain`, so it cannot
 be set before the first deploy.
 
 **Expect a slow first deploy.** The build context carries ~254MB of weights (a
-build-time fetch was tried and reverted — see `docker/deploy.Dockerfile`), and
+build-time fetch was tried and reverted — see `Dockerfile`), and
 the image is 3.3GB.
 
 ### Things that behave differently than on localhost

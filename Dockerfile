@@ -1,5 +1,13 @@
 # Single-container deploy image. Everything in one process tree.
 #
+# AT THE REPOSITORY ROOT ON PURPOSE. It lived at docker/deploy.Dockerfile and
+# Railway ignored it, auto-detecting a Python app and building with railpack
+# instead -- `railway.json`'s builder/dockerfilePath is Config-as-Code, which is
+# deprecated, and `railway config migrate` emits both of those fields as
+# COMMENTS rather than translating them. A root Dockerfile is auto-detected with
+# no configuration at all, which is the one mechanism that does not depend on a
+# format in the middle of being replaced.
+#
 # The compose stack runs five services on three images. A platform deploy would
 # mean five builds and five boots to get wrong before a deadline, so this trades
 # the topology for one build and one boot.
@@ -42,22 +50,33 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
       librosa==0.10.2.post1 \
       pillow-heif==0.18.0
 
-# Weights are COPIED from the build context, in a layer above COPY src/ so
-# application rebuilds never touch them.
+# Weights are FETCHED at build time. This is not an optimisation -- on a
+# platform it is the only thing that works.
 #
-# A build-time `curl` from the public release URL was tried and reverted: it
-# would keep 254MB out of the context (which a platform re-uploads on every
-# deploy), but curl failed with exit 35, an SSL connect error, inside this
-# machine's build network. Possibly TLS interception locally; it may well work
-# on a platform builder. Not worth diagnosing against a deadline when COPY is
-# verified working, so the cost is accepted: expect ~254MB of context upload
-# per deploy. If you want it back, the pinned values were:
-#   URL    https://github.com/selimsef/dfdc_deepfake_challenge/releases/download/0.0.1/final_111_DeepFakeClassifier_tf_efficientnet_b7_ns_0_36
-#   SHA256 9db77ab9318863e2f8ab287c8eb83c2232584b82dc2fb41f1d614ddd7900cccb
-# and the sha256 check is worth keeping if you do -- a truncated asset would
-# otherwise produce a model whose id, derived from that hash, silently
+# COPY from the build context was tried and fails on Railway: its upload
+# snapshot respects .gitignore, not .dockerignore, and models/weights/ is
+# gitignored on purpose so a 254MB checkpoint never lands in git. The result
+# was a 386kB snapshot with no weights in it. Local docker build worked,
+# which is exactly why this had to be found on the platform.
+#
+# A local build of this file failed with curl exit 35 (SSL connect error),
+# almost certainly TLS interception on that machine. It is kept anyway: the
+# builder's network is not that machine's, and there is no alternative that
+# gets 254MB into a platform build context without committing it.
+#
+# BUILD time, not container start. Fetching at start would put a ~250MB
+# download inside the health-check window on every restart.
+#
+# The sha256 is pinned and checked, which is stronger provenance than a blob
+# in a build context: a truncated or swapped asset fails the build loudly
+# rather than yielding a model whose id -- derived from this hash -- silently
 # disagrees with every job row already stored.
-COPY models/weights/dfdc_b7_ns_seed111.pth /models/weights/dfdc_b7_ns_seed111.pth
+ARG WEIGHTS_URL=https://github.com/selimsef/dfdc_deepfake_challenge/releases/download/0.0.1/final_111_DeepFakeClassifier_tf_efficientnet_b7_ns_0_36
+ARG WEIGHTS_SHA256=9db77ab9318863e2f8ab287c8eb83c2232584b82dc2fb41f1d614ddd7900cccb
+RUN mkdir -p /models/weights \
+ && curl -fL --retry 5 --retry-all-errors -o /models/weights/dfdc_b7_ns_seed111.pth "$WEIGHTS_URL" \
+ && echo "$WEIGHTS_SHA256  /models/weights/dfdc_b7_ns_seed111.pth" | sha256sum -c -
+
 # Light, fast-changing deps last.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

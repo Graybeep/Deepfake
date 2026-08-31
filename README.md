@@ -244,7 +244,7 @@ sizing, and an explicit list of what the trade gives up (most importantly the CP
 worker's network isolation, which is the AV-scanning substitute).
 
 ```bash
-docker build -f docker/deploy.Dockerfile -t deepfake-deploy .
+docker build -t deepfake-deploy .
 ```
 
 **Weights are baked in.** The compose stack bind-mounts `./models`, which cannot
