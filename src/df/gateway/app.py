@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import pathlib
 import time
 
 from fastapi import (
@@ -27,7 +28,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from df import storage as storage_mod
@@ -536,6 +537,26 @@ WORKER_GRACE_SECONDS = 150
 _STARTED_AT = time.monotonic()
 
 
+@app.get("/app", include_in_schema=False)
+def demo_ui() -> Response:
+    """Serve the single-page UI from the API itself.
+
+    Same origin as the API, so CORS never applies to it. That matters more than
+    it sounds: cross-origin browser behaviour is the one part of this system that
+    has never been exercised, and serving the page from here removes it from the
+    critical path entirely. The identical file also deploys to a static host,
+    where it takes the API base from ?api= and CORS does apply.
+
+    Read from disk per request rather than cached at import. The file is a few KB,
+    this is not a hot path, and an edit showing up on refresh is worth more during
+    a demo than a microsecond.
+    """
+    page = pathlib.Path(__file__).resolve().parents[3] / "web" / "index.html"
+    if not page.is_file():
+        raise HTTPException(404, "UI not bundled in this image")
+    return Response(content=page.read_text(encoding="utf-8"), media_type="text/html")
+
+
 @app.get("/")
 def root() -> dict:
     """Service identity and where to go next.
@@ -551,6 +572,7 @@ def root() -> dict:
     return {
         "service": "Deepfake Detection API",
         "status": "ok",
+        "ui": "/app",
         "docs": "/docs",
         "health": "/healthz",
         "detector": {

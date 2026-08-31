@@ -84,6 +84,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY migrations/ ./migrations/
 COPY scripts/ ./scripts/
 COPY src/ ./src/
+# The single-page UI, served by the API at /app (same origin, so no CORS).
+COPY web/ ./web/
 
 # Uploads and derived crops live here. Created at build time so the directory
 # exists and is writable before the first upload -- a permission error on first

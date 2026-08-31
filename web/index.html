@@ -1,0 +1,255 @@
+<!doctype html>
+<!--
+  Single self-contained page. No build step, no dependencies, no framework.
+
+  Deliberately deployable two ways from one file:
+    * served by the API itself at /app  -> same origin, so CORS never applies
+    * uploaded to a static host (Vercel) -> cross-origin, needs DF_CORS_ORIGINS
+
+  The API base defaults to this page's own origin, so the same file works in both
+  places. Override with ?api=https://host for the static-host case.
+
+  What it renders is the point: not a verdict alone, but the evidence behind it.
+  Per-face scores with detection confidence, what the confidence gate discarded
+  and why, coverage, and every advisory the API attaches. A single opaque
+  "uncertain" reads as broken; the same result with its reasoning shown reads as
+  a system that knows what it does not know.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Deepfake Detection</title>
+  <style>
+    :root{
+      --bg:#0f1115; --panel:#171a21; --line:#262b36; --ink:#e8ecf2; --muted:#9aa4b2;
+      --accent:#5b9dff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --unk:#8b949e;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);
+      font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+    .wrap{max-width:820px;margin:0 auto;padding:28px 20px 60px}
+    header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+    h1{font-size:21px;margin:0;letter-spacing:-.2px}
+    .health{font-size:12px;color:var(--muted);margin-left:auto;display:flex;align-items:center;gap:6px}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--unk)}
+    .dot.up{background:var(--ok)} .dot.down{background:var(--bad)}
+    .sub{color:var(--muted);font-size:13px;margin:0 0 22px}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+    .drop{border:1.5px dashed var(--line);border-radius:10px;padding:34px 18px;text-align:center;
+      cursor:pointer;transition:border-color .15s,background .15s}
+    .drop:hover,.drop.over{border-color:var(--accent);background:#1b2130}
+    .drop input{display:none}
+    .drop b{color:var(--accent)}
+    .hint{color:var(--muted);font-size:12px;margin-top:8px}
+    button{background:var(--accent);color:#08111f;border:0;border-radius:7px;padding:9px 16px;
+      font-weight:600;font-size:14px;cursor:pointer}
+    button:disabled{opacity:.45;cursor:default}
+    .stage{font-size:13px;color:var(--muted);margin-top:12px;min-height:20px}
+    .verdict{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+    .band{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+      padding:5px 11px;border-radius:20px;border:1px solid}
+    .score{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+    .score small{font-size:13px;color:var(--muted);font-weight:400}
+    table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+    th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+    th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+    tr.gated{color:var(--muted)}
+    tr.gated td:first-child::after{content:" discarded";color:var(--warn);font-size:11px}
+    .adv{margin:14px 0 0;padding:0;list-style:none}
+    .adv li{border-left:3px solid var(--warn);background:#1d1a12;padding:9px 12px;margin-bottom:8px;
+      border-radius:0 6px 6px 0;font-size:13px;color:#e8dcc0}
+    .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;
+      font-size:12px}
+    .meta div{background:#12151b;border:1px solid var(--line);border-radius:7px;padding:9px 11px}
+    .meta span{display:block;color:var(--muted);font-size:11px;margin-bottom:2px}
+    .meta code{font-size:11px;word-break:break-all}
+    .err{border-left:3px solid var(--bad);background:#1e1315;padding:11px 13px;border-radius:0 6px 6px 0;
+      font-size:13px;color:#f5c2c0}
+    footer{color:var(--muted);font-size:11px;margin-top:26px;line-height:1.7}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Deepfake Detection</h1>
+    <div class="health"><span class="dot" id="dot"></span><span id="health">checking…</span></div>
+  </header>
+  <p class="sub">Upload a photo. The result shows every face considered, what was
+    discarded and why, and how far the score can be trusted.</p>
+
+  <div class="panel">
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="image/*">
+      <div><b>Choose a photo</b> or drop one here</div>
+      <div class="hint">JPEG, PNG, or HEIC straight from a phone. Max 2 GB.</div>
+    </label>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
+      <button id="go" disabled>Analyse</button>
+      <span class="stage" id="stage"></span>
+    </div>
+  </div>
+
+  <div id="out"></div>
+
+  <footer>
+    Scores are advisory. The detector is a public research checkpoint, its
+    calibration is unfitted, and there is no adversarial pre-classifier — scores
+    can be manipulated deliberately. This is a triage signal, not a finding.
+  </footer>
+</div>
+
+<script>
+// API base: this page's origin by default, so serving from the API needs no
+// config and no CORS. ?api=... overrides it for a static host.
+const API = new URLSearchParams(location.search).get('api')
+          || location.origin.replace(/\/$/, '');
+
+const $ = id => document.getElementById(id);
+const BANDS = {
+  likely_authentic:   ['#3fb950', 'likely authentic'],
+  leaning_authentic:  ['#57ab5a', 'leaning authentic'],
+  uncertain:          ['#d29922', 'uncertain'],
+  leaning_manipulated:['#e07b39', 'leaning manipulated'],
+  likely_manipulated: ['#f85149', 'likely manipulated'],
+  undetermined:       ['#8b949e', 'undetermined'],
+};
+
+// Health is polled and shown, rather than inferred from a stalled upload. A
+// dead inference worker is otherwise indistinguishable from a slow model, and
+// the API reports worker liveness explicitly for exactly this reason.
+async function health() {
+  try {
+    const r = await fetch(`${API}/healthz`);
+    const d = await r.json();
+    const dead = Object.entries(d.workers || {}).filter(([, up]) => !up).map(([k]) => k);
+    $('dot').className = 'dot ' + (r.ok && !dead.length ? 'up' : 'down');
+    $('health').textContent = !dead.length ? `all workers up · ${d.inference_backend}`
+      : (d.warming ? `starting: ${dead.join(', ')}` : `unavailable: ${dead.join(', ')}`);
+  } catch {
+    $('dot').className = 'dot down';
+    $('health').textContent = 'API unreachable';
+  }
+}
+health(); setInterval(health, 15000);
+
+let picked = null;
+$('file').onchange = e => {
+  picked = e.target.files[0] || null;
+  $('go').disabled = !picked;
+  if (picked) $('drop').querySelector('div').innerHTML =
+    `<b>${picked.name}</b> · ${(picked.size / 1048576).toFixed(1)} MB`;
+};
+const drop = $('drop');
+['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) { $('file').files = e.dataTransfer.files; $('file').onchange({ target: { files: [f] } }); }
+});
+
+$('go').onclick = async () => {
+  if (!picked) return;
+  $('go').disabled = true; $('out').innerHTML = '';
+  const stage = m => $('stage').textContent = m;
+  try {
+    stage('requesting upload grant…');
+    const jr = await fetch(`${API}/v1/jobs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ media_type: 'image', content_type: picked.type || 'image/jpeg' }),
+    });
+    if (!jr.ok) throw new Error(`job create failed: ${jr.status} ${await jr.text()}`);
+    const job = await jr.json();
+
+    stage('uploading…');
+    // Same multipart shape whether the grant points at S3 or back at this API,
+    // so the client cannot tell which storage backend is behind it.
+    const form = new FormData();
+    for (const [k, v] of Object.entries(job.upload_fields || {})) form.append(k, v);
+    form.append('file', picked, picked.name);
+    const up = await fetch(job.upload_url, { method: 'POST', body: form });
+    if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
+
+    stage('queued for analysis…');
+    const ack = await fetch(`${API}/v1/jobs/${job.job_id}/uploaded`, { method: 'POST' });
+    if (!ack.ok) throw new Error(`notify failed: ${ack.status}`);
+
+    // Bounded poll. A spinner that never resolves is the failure mode this
+    // avoids: after the deadline, say so instead of spinning.
+    const deadline = Date.now() + 90000;
+    let doc;
+    while (Date.now() < deadline) {
+      const r = await fetch(`${API}/v1/jobs/${job.job_id}`);
+      doc = await r.json();
+      if (['complete', 'failed', 'dead_letter'].includes(doc.status)) break;
+      stage(`${doc.live_status || doc.status}…`);
+      await new Promise(s => setTimeout(s, 900));
+    }
+    stage('');
+    if (!doc || !['complete', 'failed', 'dead_letter'].includes(doc.status))
+      throw new Error('timed out after 90s. Check the worker status indicator above.');
+    render(doc);
+  } catch (e) {
+    stage('');
+    $('out').innerHTML = `<div class="panel"><div class="err">${esc(e.message)}</div></div>`;
+  } finally {
+    $('go').disabled = false;
+  }
+};
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function render(d) {
+  if (d.status !== 'complete') {
+    $('out').innerHTML = `<div class="panel"><div class="err">
+      Job ${esc(d.status)}: ${esc(d.failure_reason || 'no reason recorded')}</div></div>`;
+    return;
+  }
+  const [colour, label] = BANDS[d.band] || BANDS.undetermined;
+  const ev = d.face_evidence || {};
+  const scored = ev.top_faces || [], gated = ev.discarded_faces || [];
+
+  const rows = [
+    ...scored.map(f => `<tr><td>face ${f.face_index}</td>
+      <td><b>${f.score.toFixed(2)}</b></td>
+      <td>${(f.confidence * 100).toFixed(0)}%</td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}px` : '—'}</td></tr>`),
+    ...gated.map(f => `<tr class="gated"><td>face ${f.face_index}</td>
+      <td>not scored</td>
+      <td>${(f.confidence * 100).toFixed(0)}%</td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}px` : '—'}</td></tr>`),
+  ].join('');
+
+  $('out').innerHTML = `
+    <div class="panel">
+      <div class="verdict">
+        <span class="band" style="color:${colour};border-color:${colour}">${label}</span>
+        <span class="score">${d.aggregate_score === null ? '—'
+          : d.aggregate_score.toFixed(1)}<small>&thinsp;/ 100</small></span>
+      </div>
+      ${rows ? `<table><tr><th>face</th><th>score</th><th>detection conf.</th><th>size</th></tr>
+        ${rows}</table>` : ''}
+      ${gated.length ? `<div class="hint">Faces below ${
+        ((ev.detection_confidence_ratio || 0) * 100).toFixed(0)}% of the strongest
+        detection in the frame are not scored — a weak detection is usually not a
+        face, and an arbitrary score from one would set the verdict.</div>` : ''}
+      <ul class="adv">${(d.advisories || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul>
+      <div class="meta">
+        <div><span>faces found</span>${ev.faces_total ?? d.face_count ?? '—'}</div>
+        <div><span>coverage</span>${d.coverage === null || d.coverage === undefined
+          ? '—' : (d.coverage * 100).toFixed(0) + '%'}
+          ${d.items_total ? ` (${d.item_count}/${d.items_total})` : ''}</div>
+        <div><span>media deleted</span>${d.media_deleted ? 'yes' : 'no'}</div>
+        <div><span>trust level</span>${esc(d.model_validation || 'not recorded')}</div>
+        <div><span>calibration</span>${esc(d.calibration || 'not recorded')}</div>
+        <div><span>model</span><code>${esc(d.model_version_id || 'none')}</code></div>
+      </div>
+    </div>`;
+}
+</script>
+</body>
+</html>
