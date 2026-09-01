@@ -54,6 +54,27 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   worker runs the stub and no test covered the branch), and even when it worked
   it destroyed the aspect ratio *before* the careful resize, making that step a
   no-op. Two resizes, and the wrong one won.
+- **Video is STILL not reliable after streaming the frames. 3/5 clean.**
+  `measured: yes` 2026-09-01, five consecutive runs of the same 20 s 720p clip
+  at an 8-frame cap against the deployed service, after the streaming fix:
+  54.5s CRASHED / 4.6s clean / 4.1s clean / 4.1s clean / 99.4s CRASHED.
+  **Runs 2-4 were all clean, so a single test would have reported success** --
+  this is the case that only repeated runs can see.
+  Streaming was still worth doing and is kept: `measured: yes`, peak delta on a
+  1080p clip fell 205.5 MB -> 146.7 MB (29%). It is not enough, and the reason
+  is worth knowing before anyone tries again: **RSS is a high-water mark and
+  CPython does not return freed pages to the OS**, so per-frame release only
+  partly shows up.
+  **The next thing to remove is a pointless round trip, not more caps.** The
+  sampler does `cv2.imencode(".png", frame)` and the extractor immediately does
+  `cv2.imdecode` on the result -- IN THE SAME PROCESS. Every frame is losslessly
+  encoded and decoded for nothing, and the encoded copy is the single largest
+  allocation on the path (3.4 MB per 1080p frame). Passing the decoded array
+  straight from sampler to extractor removes it, and needs `Frame.data: bytes`
+  and `FaceExtractor.extract(image_bytes)` changed together. Do NOT "fix" it by
+  switching PNG to JPEG: this model already reads compression as manipulation,
+  so lossy intermediates would corrupt the score to save memory.
+  Until then video stays out of the UI. `DF_VIDEO_MAX_FRAMES` is 8.
 - **Video works but is NOT reliable on the current host, and the frame cap is
   not the fix.** `OpenCVFrameSampler.sample()` returns a fully materialised
   `list[Frame]` in which every `Frame.data` is a PNG-encoded full frame, so peak

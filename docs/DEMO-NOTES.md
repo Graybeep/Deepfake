@@ -142,6 +142,7 @@ watching."
 | 20 s @ 720p, 40 frames | `gpu-inference exited with -9` — OOM |
 | 10 s @ 1080p, 12 frames | 107 s, container down and back twice |
 | **same 20 s clip, 3 runs, 8-frame cap** | **201 s never finished / 53 s crashed-then-recovered / 4.2 s clean** |
+| same clip, 5 runs, **after** streaming the frames | **3/5 clean** — 54.5 s crashed / 4.6 / 4.1 / 4.1 clean / 99.4 s crashed |
 
 Three identical requests, three different outcomes. Lowering
 `DF_VIDEO_MAX_FRAMES` from 300 to 12 to 8 did not make it deterministic, because
