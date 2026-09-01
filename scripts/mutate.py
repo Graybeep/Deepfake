@@ -934,6 +934,81 @@ DETECT_CAP_MUTATIONS = [
     ),
 ]
 
+ANALYZER_WITNESS = r"""
+import pathlib, re
+
+page = pathlib.Path("web/index.html").read_text(encoding="utf-8")
+plain = page.split("const PLAIN = {", 1)[1].split("};", 1)[0]
+bands = page.split("const BANDS = {", 1)[1].split("};", 1)[0]
+
+from df.bands import Band
+missing_band = [b.value for b in Band if not re.search(rf"\b{b.value}:\s*\[", bands)]
+missing_plain = [b.value for b in Band if not re.search(rf"\b{b.value}:", plain)]
+print("bands without a headline ->", missing_band)
+print("bands without plain text ->", missing_plain)
+print("advisories mapped        ->", "(d.advisories || []).map" in page)
+print("advisory truncated       ->", "slice" in page.split("(d.advisories || []).map", 1)[1][:200])
+low = page.lower()
+print("scale ends markup        ->",
+      bool(re.search(r'class="ends"><span><b>0</b>.*?<b>100</b>', page, re.S)))
+print("overclaims present       ->",
+      [p for p in ("this photo is real", "is genuine", "guaranteed") if p in low])
+"""
+
+ANALYZER_MUTATIONS = [
+    Mutation(
+        # A band vanishes from BANDS. Falls through to BANDS.undetermined, so a
+        # real verdict is shown as "Could not analyse this" -- silent, and wrong
+        # in the direction that tells someone their analysed photo was not.
+        label="a band loses its headline (real verdict reads as 'could not analyse')",
+        file="web/index.html",
+        old="  likely_manipulated: ['#f85149', 'Likely manipulated'],",
+        new="",
+        witness=ANALYZER_WITNESS,
+        test="tests/test_analyzer_ui.py",
+    ),
+    Mutation(
+        # Same, for the sentence under the headline.
+        label="a band loses its plain-language sentence",
+        file="web/index.html",
+        old=("  uncertain:" + chr(10) +
+             "    'The signals point both ways. This one needs a human to look at it.',"),
+        new="",
+        witness=ANALYZER_WITNESS,
+        test="tests/test_analyzer_ui.py",
+    ),
+    Mutation(
+        # "Simplify" taken too far: cap the advisories to the first line. This
+        # is the realistic regression, because the advisories are long and
+        # truncating them looks like tidying.
+        label="advisory text truncated (the caveats quietly shortened)",
+        file="web/index.html",
+        old="(d.advisories || []).map(a => `<li>${esc(a)}</li>`)",
+        new="(d.advisories || []).map(a => `<li>${esc(a).slice(0, 40)}</li>`)",
+        witness=ANALYZER_WITNESS,
+        test="tests/test_analyzer_ui.py",
+    ),
+    Mutation(
+        # Back to a bare number with no polarity -- the original bug.
+        label="scale direction labels removed (number with no polarity)",
+        file="web/index.html",
+        old="""      <div class="ends"><span><b>0</b> no signs</span>
+        <span>strong signs <b>100</b></span></div>""",
+        new="""      <div class="ends"></div>""",
+        witness=ANALYZER_WITNESS,
+        test="tests/test_analyzer_ui.py",
+    ),
+    Mutation(
+        # The headline stops hedging and asserts a fact about the world.
+        label="copy asserts what the image IS, not what was observed",
+        file="web/index.html",
+        old="    'No signs of face manipulation were found.',",
+        new="    'This photo is real and is genuine.',",
+        witness=ANALYZER_WITNESS,
+        test="tests/test_analyzer_ui.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1178,6 +1253,10 @@ if __name__ == "__main__":
     print("\nbounded face detection (the phone-photo OOM)")
     dc_bad = run_all(DETECT_CAP_MUTATIONS)
     print(f"  {len(DETECT_CAP_MUTATIONS)} mutation(s), {dc_bad} did not produce RED")
+
+    print("\nanalyzer result display (plain language, caveats kept)")
+    an_bad = run_all(ANALYZER_MUTATIONS)
+    print(f"  {len(ANALYZER_MUTATIONS)} mutation(s), {an_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

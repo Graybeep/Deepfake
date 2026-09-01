@@ -46,16 +46,37 @@
       font-weight:600;font-size:14px;cursor:pointer}
     button:disabled{opacity:.45;cursor:default}
     .stage{font-size:13px;color:var(--muted);margin-top:12px;min-height:20px}
-    .verdict{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-    .band{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
-      padding:5px 11px;border-radius:20px;border:1px solid}
-    .score{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
-    .score small{font-size:13px;color:var(--muted);font-weight:400}
+    /* The verdict a non-specialist reads first: a plain sentence, then a scale
+       that says which end is which. The old version showed "0.79 / 100" with
+       nothing indicating that low means authentic -- a number with no direction
+       is worse than no number, because it invites the reader to guess. */
+    .headline{font-size:25px;font-weight:700;letter-spacing:-.3px;margin:0 0 5px}
+    .plain{color:var(--muted);font-size:14px;margin:0 0 18px}
+    .meter{margin:0 0 6px}
+    .track{position:relative;height:10px;border-radius:6px;overflow:hidden;display:flex}
+    .track i{flex:1}
+    .pin{position:absolute;top:-5px;width:3px;height:20px;background:var(--ink);
+      border-radius:2px;box-shadow:0 0 0 2px var(--panel);transform:translateX(-1.5px)}
+    .ends{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);
+      margin-top:7px}
+    .ends b{font-weight:600;color:var(--ink)}
+    .facts{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted);
+      margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+    /* One short honest line, always visible. The three full advisories are kept
+       verbatim in the details block below -- condensed here, never dropped. */
+    .caution{display:flex;gap:10px;border-left:3px solid var(--warn);background:#1d1a12;
+      padding:11px 13px;border-radius:0 6px 6px 0;font-size:13px;color:#e8dcc0;margin-top:16px}
+    .caution b{display:block;margin-bottom:2px;color:#f0e4c8}
+    details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+    summary{cursor:pointer;font-size:13px;color:var(--muted);list-style:none}
+    summary::-webkit-details-marker{display:none}
+    summary::before{content:"\25B8 ";display:inline-block;transition:transform .15s}
+    details[open] summary::before{transform:rotate(90deg)}
+    summary:hover{color:var(--ink)}
     table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
     th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
     th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
     tr.gated{color:var(--muted)}
-    tr.gated td:first-child::after{content:" discarded";color:var(--warn);font-size:11px}
     .adv{margin:14px 0 0;padding:0;list-style:none}
     .adv li{border-left:3px solid var(--warn);background:#1d1a12;padding:9px 12px;margin-bottom:8px;
       border-radius:0 6px 6px 0;font-size:13px;color:#e8dcc0}
@@ -75,8 +96,7 @@
     <h1>Deepfake Detection</h1>
     <div class="health"><span class="dot" id="dot"></span><span id="health">checking…</span></div>
   </header>
-  <p class="sub">Upload a photo. The result shows every face considered, what was
-    discarded and why, and how far the score can be trusted.</p>
+  <p class="sub">Upload a photo to check it for signs of face manipulation.</p>
 
   <div class="panel">
     <label class="drop" id="drop">
@@ -93,9 +113,9 @@
   <div id="out"></div>
 
   <footer>
-    Scores are advisory. The detector is a public research checkpoint, its
-    calibration is unfitted, and there is no adversarial pre-classifier — scores
-    can be manipulated deliberately. This is a triage signal, not a finding.
+    Research prototype. The detector is a public research checkpoint that has not
+    been validated for this use, and its scores can be deliberately fooled.
+    Use it to decide what to look at, never as evidence.
   </footer>
 </div>
 
@@ -107,12 +127,36 @@ const API = new URLSearchParams(location.search).get('api')
 
 const $ = id => document.getElementById(id);
 const BANDS = {
-  likely_authentic:   ['#3fb950', 'likely authentic'],
-  leaning_authentic:  ['#57ab5a', 'leaning authentic'],
-  uncertain:          ['#d29922', 'uncertain'],
-  leaning_manipulated:['#e07b39', 'leaning manipulated'],
-  likely_manipulated: ['#f85149', 'likely manipulated'],
-  undetermined:       ['#8b949e', 'undetermined'],
+  likely_authentic:   ['#3fb950', 'Looks authentic'],
+  leaning_authentic:  ['#57ab5a', 'Probably authentic'],
+  uncertain:          ['#d29922', 'Inconclusive'],
+  leaning_manipulated:['#e07b39', 'Possibly manipulated'],
+  likely_manipulated: ['#f85149', 'Likely manipulated'],
+  undetermined:       ['#8b949e', 'Could not analyse this'],
+};
+
+// One sentence per band, in the words someone would use. Each says what was
+// OBSERVED, never what the image is: "no signs were found" is a fact about the
+// detector, "this photo is real" is a claim about the world that an
+// uncalibrated research checkpoint cannot make. The band names above are the
+// same hedge, and these must not read as more certain than they do.
+const PLAIN = {
+  likely_authentic:
+    'No signs of face manipulation were found.',
+  leaning_authentic:
+    'Very little to suggest manipulation, but not a clean result.',
+  uncertain:
+    'The signals point both ways. This one needs a human to look at it.',
+  leaning_manipulated:
+    'Some signs consistent with manipulation — but compression and screenshots ' +
+    'look similar to this detector, so check how the photo was saved before ' +
+    'concluding anything.',
+  likely_manipulated:
+    'Strong signs consistent with manipulation. Worth a closer look — this is ' +
+    'a reason to check, not a conclusion.',
+  undetermined:
+    'No face could be read in this file, so nothing was scored. That is not the ' +
+    'same as finding nothing wrong — it means the photo was never analysed.',
 };
 
 // Health is polled and shown, rather than inferred from a stalled upload. A
@@ -212,42 +256,92 @@ function render(d) {
   const [colour, label] = BANDS[d.band] || BANDS.undetermined;
   const ev = d.face_evidence || {};
   const scored = ev.top_faces || [], gated = ev.discarded_faces || [];
+  const plain = PLAIN[d.band] || PLAIN.undetermined;
+  const score = d.aggregate_score;
 
+  // The scale, drawn. Bands are 20 wide, so the track is five equal zones in
+  // the same colours the verdict uses, with the score pinned on it. This is the
+  // only thing on the page that says which direction is bad.
+  const meter = score === null || score === undefined ? '' : `
+    <div class="meter">
+      <div class="track">
+        ${['likely_authentic','leaning_authentic','uncertain','leaning_manipulated',
+           'likely_manipulated'].map(b => `<i style="background:${BANDS[b][0]}"></i>`).join('')}
+        <span class="pin" style="left:${Math.max(0, Math.min(100, score))}%"></span>
+      </div>
+      <div class="ends"><span><b>0</b> no signs</span>
+        <span>strong signs <b>100</b></span></div>
+    </div>`;
+
+  // Shown only when it adds something. For the ordinary one-face photo the
+  // table restated the headline in smaller type; a second face, or a discarded
+  // detection, is the case where per-face numbers actually inform.
+  const worthTable = scored.length > 1 || gated.length > 0;
+
+  // Numbered in DISPLAY order, not by face_index. The index is an internal
+  // position in the detector's output, so the scored face came out as "Face 2"
+  // with the skipped ones either side of it -- a reader has no way to know the
+  // numbering is not a ranking.
+  //
+  // The "note" column carries the gate's own reasoning. The previous version
+  // printed the raw detection confidence as a percentage, which reads as a
+  // calibrated quantity and is not one: it is an unbounded Haar reject level
+  // divided by 10. What actually decided the outcome is the RELATIVE strength,
+  // which is the number the gate compares, so that is what is shown.
+  let n = 0;
   const rows = [
-    ...scored.map(f => `<tr><td>face ${f.face_index}</td>
-      <td><b>${f.score.toFixed(2)}</b></td>
-      <td>${(f.confidence * 100).toFixed(0)}%</td>
-      <td>${f.face_w ? `${f.face_w}×${f.face_h}px` : '—'}</td></tr>`),
-    ...gated.map(f => `<tr class="gated"><td>face ${f.face_index}</td>
-      <td>not scored</td>
-      <td>${(f.confidence * 100).toFixed(0)}%</td>
-      <td>${f.face_w ? `${f.face_w}×${f.face_h}px` : '—'}</td></tr>`),
+    ...scored.map(f => `<tr><td>Face ${++n}</td>
+      <td><b>${f.score.toFixed(1)}</b></td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : '—'}</td>
+      <td>${scored.length + gated.length > 1 ? 'clearest face' : 'scored'}</td></tr>`),
+    ...gated.map(f => `<tr class="gated"><td>Face ${++n}</td>
+      <td>—</td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : '—'}</td>
+      <td>skipped — ${f.relative_to_best === undefined ? 'too weak'
+        : `${(f.relative_to_best * 100).toFixed(0)}% as strong`}</td></tr>`),
   ].join('');
+
+  const facts = [
+    `${ev.faces_total ?? d.face_count ?? 0} ${
+      (ev.faces_total ?? d.face_count ?? 0) === 1 ? 'face' : 'faces'} checked`,
+    gated.length ? `${gated.length} weak detection${gated.length > 1 ? 's' : ''} skipped` : '',
+    d.media_deleted ? 'your photo was deleted' : 'photo not yet deleted',
+  ].filter(Boolean).join(' &nbsp;·&nbsp; ');
 
   $('out').innerHTML = `
     <div class="panel">
-      <div class="verdict">
-        <span class="band" style="color:${colour};border-color:${colour}">${label}</span>
-        <span class="score">${d.aggregate_score === null ? '—'
-          : d.aggregate_score.toFixed(1)}<small>&thinsp;/ 100</small></span>
+      <p class="headline" style="color:${colour}">${label}</p>
+      <p class="plain">${plain}</p>
+      ${meter}
+      <div class="facts">${facts}</div>
+      ${worthTable ? `<table><tr><th>face</th><th>score</th><th>size px</th><th></th></tr>
+        ${rows}</table>
+        ${gated.length ? `<div class="hint">A face detected far less strongly than the
+          clearest one in the photo is skipped rather than scored — usually it is not a
+          face, and a made-up number from it would decide the verdict.</div>` : ''}` : ''}
+
+      <div class="caution">
+        <span>&#9888;</span>
+        <div><b>Early prototype — a rough signal, not proof.</b>
+        Screenshots and heavily compressed photos often score high even when genuine.
+        The score is not a percentage or a probability.</div>
       </div>
-      ${rows ? `<table><tr><th>face</th><th>score</th><th>detection conf.</th><th>size</th></tr>
-        ${rows}</table>` : ''}
-      ${gated.length ? `<div class="hint">Faces below ${
-        ((ev.detection_confidence_ratio || 0) * 100).toFixed(0)}% of the strongest
-        detection in the frame are not scored — a weak detection is usually not a
-        face, and an arbitrary score from one would set the verdict.</div>` : ''}
-      <ul class="adv">${(d.advisories || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul>
-      <div class="meta">
-        <div><span>faces found</span>${ev.faces_total ?? d.face_count ?? '—'}</div>
-        <div><span>coverage</span>${d.coverage === null || d.coverage === undefined
-          ? '—' : (d.coverage * 100).toFixed(0) + '%'}
-          ${d.items_total ? ` (${d.item_count}/${d.items_total})` : ''}</div>
-        <div><span>media deleted</span>${d.media_deleted ? 'yes' : 'no'}</div>
-        <div><span>trust level</span>${esc(d.model_validation || 'not recorded')}</div>
-        <div><span>calibration</span>${esc(d.calibration || 'not recorded')}</div>
-        <div><span>model</span><code>${esc(d.model_version_id || 'none')}</code></div>
-      </div>
+
+      <details>
+        <summary>Technical details</summary>
+        <ul class="adv">${(d.advisories || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul>
+        <div class="meta">
+          <div><span>score</span>${score === null || score === undefined
+            ? '—' : score.toFixed(4)}</div>
+          <div><span>band</span>${esc(d.band || '—')}</div>
+          <div><span>coverage</span>${d.coverage === null || d.coverage === undefined
+            ? '—' : (d.coverage * 100).toFixed(0) + '%'}
+            ${d.items_total ? ` (${d.item_count}/${d.items_total})` : ''}</div>
+          <div><span>trust level</span>${esc(d.model_validation || 'not recorded')}</div>
+          <div><span>calibration</span>${esc(d.calibration || 'not recorded')}</div>
+          <div><span>model</span><code>${esc(d.model_version_id || 'none')}</code></div>
+        </div>
+      </details>
     </div>`;
 }
 </script>
