@@ -104,6 +104,64 @@ rotating edge; two hops reaches the client. `GET /v1/whoami` shows the resolved
 identity and the headers behind it, which is how this was determined rather than
 guessed — the first guess was wrong and failed silently.
 
+## Audio: say it first, before anyone finds it
+
+**The line, early, unprompted:**
+
+> "Image and video run the real DFDC-winner weights. Audio has the full
+> pipeline — chunking, aggregation, routing, retention — and a stub scorer,
+> because that checkpoint is a face model and pointing it at spectrograms would
+> produce confident numbers from something that has never seen audio."
+
+Said first, that reads as engineering discipline. Found by a judge, it reads as
+a hidden hole. Same information, opposite impression, and the only cost is who
+says it first.
+
+**A judge cannot reach it by clicking.** `measured: yes` 2026-09-01 against the
+deployed `/app`:
+
+- the file input is `accept="image/*"`, so the picker filters to images;
+- the client sends `media_type: 'image'` **hardcoded** — it is the only value
+  the UI can produce, so an audio job cannot be created from the page at all;
+- forcing a WAV through the picker anyway lands in the *image* pipeline, which
+  returns `undetermined`, `aggregate_score: None`, `model_version_id: None` and
+  `MEDIA NOT DECODED: ... detected as 'webp-or-wav' ... so no faces were
+  examined`. No number is invented.
+
+So no config change and no redeploy were needed to close this. Reaching a stub
+audio score requires calling `POST /v1/jobs` directly with
+`media_type: "audio"`.
+
+**What the audio pipeline actually does**, if asked. `measured: yes` on the
+deployed service with a 21 s WAV: 7 log-mel spectrogram chunks, all 7 scored,
+`coverage 1.0`, routed to `uncertain` at 40.2638, media deleted. Every stage is
+real; only the scorer is not. That 40.26 is a SHA-256 of the input bytes mapped
+onto 0–100 — deterministic, stable for the same file, uncorrelated with
+manipulation. The advisory says so: *"PLACEHOLDER MODEL: this score was produced
+by a stub scorer, not a trained detector. It carries no detection meaning."*
+
+**If audio comes up as a limitation, the floor is the good answer.** A 6 s file
+produces 2 chunks against a 3-chunk minimum for audio, so it returns
+`undetermined` rather than scoring on thin evidence — the same rule as the
+detection gate: refuse rather than guess.
+
+## Known, not a problem tomorrow: slow jobs get delivered twice
+
+`measured: yes` — the first audio job after a deploy was reclaimed:
+
+    WARNING df.queue reclaimed topic=inference job=8269d576... delivery=2
+    -- previous consumer stopped without acking
+
+librosa JIT-compiles on first use, the message went unacked past the idle
+timeout, and another consumer reclaimed it. It completed on the retry, so the
+reclaim path did its job — but the mechanism is **generic, not an audio bug**:
+any job slower than `DF_QUEUE_RECLAIM_MS` is processed twice. Audio only
+surfaced it.
+
+Tomorrow's margin is fine — the slowest measured demo case is the 6-face group
+photo at 5.5 s, far inside the timeout, and the face model is warmed at boot.
+Not worth a deploy tonight. Worth knowing it exists.
+
 ## Do not
 
 - **Do not redeploy.** A container restart puts a rollout between a judge and
