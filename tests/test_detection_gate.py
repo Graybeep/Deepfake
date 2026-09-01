@@ -190,3 +190,116 @@ def test_the_shipped_default_is_the_ratio_not_an_absolute_floor(gate):
 
     assert settings.detection_confidence_ratio == 0.4
     assert not hasattr(settings, "min_detection_confidence")
+
+
+# --- the cost cap is not the gate, and must not read like it -----------------
+#
+# `measured: yes` 2026-09-01: a 24-face group photograph took the deployed
+# container down three times and never returned a verdict (196 s, three health
+# outages). A 6-face photo completes in 5.5 s. Each face is its own B7 forward
+# pass at 380x380, and the container has 1000 MB across five processes.
+#
+# # In-process. Live counterpart: upload a many-face photo to a running stack
+# # and watch /healthz -- which is how the crash was found in the first place.
+
+
+def test_faces_beyond_the_cap_are_skipped_not_scored(monkeypatch):
+    from df.config import Settings
+    from df.workers import cpu_preprocess as cp
+
+    monkeypatch.setenv("DF_MAX_FACES_SCORED", "3")
+    monkeypatch.setattr(cp, "settings", Settings())
+
+    crops = [_crop(i, 1.0 - i * 0.1) for i in range(8)]
+    capped: list[dict] = []
+    kept = cp._cap_faces(crops, capped, frame_index=0)
+
+    assert len(kept) == 3
+    assert len(capped) == 5
+
+
+def test_the_cap_keeps_the_highest_confidence_faces(monkeypatch):
+    """Ordering matters: keeping an arbitrary 3 of 8 would make the verdict
+    depend on detector output order."""
+    from df.config import Settings
+    from df.workers import cpu_preprocess as cp
+
+    monkeypatch.setenv("DF_MAX_FACES_SCORED", "2")
+    monkeypatch.setattr(cp, "settings", Settings())
+
+    crops = [_crop(0, 0.2), _crop(1, 0.9), _crop(2, 0.5)]
+    kept = cp._cap_faces(crops, [], frame_index=0)
+
+    assert {c.face_index for c in kept} == {1, 2}
+
+
+def test_the_cap_preserves_detection_order_among_survivors(monkeypatch):
+    """Sorted by confidence to CHOOSE, restored to detection order to return,
+    so face_index stays meaningful to everything downstream."""
+    from df.config import Settings
+    from df.workers import cpu_preprocess as cp
+
+    monkeypatch.setenv("DF_MAX_FACES_SCORED", "2")
+    monkeypatch.setattr(cp, "settings", Settings())
+
+    crops = [_crop(0, 0.5), _crop(1, 0.1), _crop(2, 0.9)]
+    kept = cp._cap_faces(crops, [], frame_index=0)
+
+    assert [c.face_index for c in kept] == [0, 2]
+
+
+def test_a_cap_of_zero_disables_it(monkeypatch):
+    """So the bound can be removed on a host with memory to spare, without a
+    rebuild."""
+    from df.config import Settings
+    from df.workers import cpu_preprocess as cp
+
+    monkeypatch.setenv("DF_MAX_FACES_SCORED", "0")
+    monkeypatch.setattr(cp, "settings", Settings())
+
+    crops = [_crop(i, 0.5) for i in range(30)]
+    capped: list[dict] = []
+
+    assert len(cp._cap_faces(crops, capped, frame_index=0)) == 30
+    assert capped == []
+
+
+def test_capped_faces_are_reported_separately_from_gated_ones():
+    """THE point of this feature being safe.
+
+    A gated face was judged not to be a face. A capped face was never examined.
+    Reporting them in one number would tell a reader the detector rejected
+    faces it merely skipped -- the same shape of lie as reporting "no face
+    found" for a file that could not be decoded.
+    """
+    from df.rollup import face_evidence
+
+    rows = [{"face_index": 0, "score": 12.0, "item_index": 0,
+             "confidence": 0.9, "face_w": 40, "face_h": 40}]
+    ev = face_evidence(rows, discarded={
+        "detections_discarded": 2, "detection_confidence_ratio": 0.4,
+        "discarded": [{"face_index": 5}, {"face_index": 6}],
+        "faces_capped": 7, "max_faces_scored": 8,
+        "capped": [{"face_index": 9}],
+    })
+
+    assert ev["detections_discarded"] == 2
+    assert ev["faces_capped"] == 7
+    assert ev["max_faces_scored"] == 8
+    assert ev["capped_faces"] == [{"face_index": 9}]
+    # and the two lists must not be the same object or the same content
+    assert ev["discarded_faces"] != ev["capped_faces"]
+
+
+def test_no_cap_recorded_reads_as_unknown_not_zero():
+    """An old job carries neither key. Absent must not become 0, which would
+    assert that nothing was skipped when nobody measured."""
+    from df.rollup import face_evidence
+
+    ev = face_evidence(
+        [{"face_index": 0, "score": 1.0, "item_index": 0, "confidence": 0.9}],
+        discarded=None,
+    )
+
+    assert ev["faces_capped"] is None
+    assert ev["capped_faces"] == []

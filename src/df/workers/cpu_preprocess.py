@@ -47,6 +47,40 @@ def _face_size(crop) -> dict:
 
 
 
+def _cap_faces(crops: list, capped: list, *, frame_index: int) -> list:
+    """Bound how many faces are scored per item, and RECORD the remainder.
+
+    Applied after gating, and kept separate from it on purpose. Gating answers
+    "is this a face at all"; this answers "can we afford to look at all of
+    them". Folding the two together would tell a reader that faces were rejected
+    when they were merely skipped.
+
+    `measured: yes` 2026-09-01: a 24-face group photograph took the deployed
+    container down three times and never produced a verdict, while a 6-face
+    photo completes in 5.5 s. Each face is its own B7 forward pass.
+
+    Highest confidence first. A manipulated face ranked below the cut is not
+    examined -- a real loss, stated in the result rather than hidden, which is
+    why `faces_capped` is surfaced next to `faces_total`.
+    """
+    limit = settings.max_faces_scored
+    if limit <= 0 or len(crops) <= limit:
+        return crops
+
+    ranked = sorted(crops, key=lambda c: c.confidence, reverse=True)
+    for crop in ranked[limit:]:
+        capped.append({
+            "frame_index": frame_index,
+            "face_index": crop.face_index,
+            "confidence": round(crop.confidence, 6),
+            "face_w": crop.bbox[2] if crop.bbox else None,
+            "face_h": crop.bbox[3] if crop.bbox else None,
+        })
+    # Restored to detection order so face_index stays meaningful downstream.
+    keep = {id(c) for c in ranked[:limit]}
+    return [c for c in crops if id(c) in keep]
+
+
 def _gate_detections(crops: list, discarded: list, *, frame_index: int) -> list:
     """Drop detections far weaker than the best one in the same frame, and
     RECORD what was dropped.
@@ -132,6 +166,8 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     manifest: list[dict] = []
     # Detections the confidence floor rejected. Recorded, not dropped.
     discarded: list[dict] = []
+    # Faces skipped to bound cost. A DIFFERENT thing from `discarded`.
+    capped: list[dict] = []
 
     if media_type == "video":
         sampler = build_frame_sampler()
@@ -149,9 +185,12 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
         frames_seen = 0
         for frame in sampler.sample(raw):
             frames_seen += 1
-            for crop in _gate_detections(
-                extractor.extract(frame.data, frame_index=frame.index),
-                discarded, frame_index=frame.index,
+            for crop in _cap_faces(
+                _gate_detections(
+                    extractor.extract(frame.data, frame_index=frame.index),
+                    discarded, frame_index=frame.index,
+                ),
+                capped, frame_index=frame.index,
             ):
                 key = f"{prefix}items/f{frame.index:05d}_x{crop.face_index}.png"
                 storage.put_bytes(key, crop.data, "image/png")
@@ -168,8 +207,9 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
 
     elif media_type == "image":
         extractor = build_face_extractor()
-        for crop in _gate_detections(
-            extractor.extract(raw, frame_index=0), discarded, frame_index=0
+        for crop in _cap_faces(
+            _gate_detections(extractor.extract(raw, frame_index=0), discarded, frame_index=0),
+            capped, frame_index=0,
         ):
             key = f"{prefix}items/i00000_x{crop.face_index}.png"
             storage.put_bytes(key, crop.data, "image/png")
@@ -226,6 +266,11 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
         "detections_discarded": len(discarded),
         "detection_confidence_ratio": settings.detection_confidence_ratio,
         "discarded": discarded[:50],
+        # Skipped for cost, NOT rejected. Separate keys so a reader can tell
+        # "we decided these were not faces" from "we never looked at these".
+        "faces_capped": len(capped),
+        "max_faces_scored": settings.max_faces_scored,
+        "capped": capped[:50],
     })
 
     # An empty manifest is a legitimate outcome (0 faces / no decodable audio).

@@ -297,6 +297,28 @@ class Settings:
     detect_max_side: int = field(
         default_factory=lambda: _int("DF_DETECT_MAX_SIDE", 1600)
     )
+    # Most faces SCORED per item, after gating. 0 disables the cap.
+    #
+    # A cost bound, not a quality judgement, and it is recorded separately from
+    # gated detections for exactly that reason: a gated face was judged not to be
+    # a face, a capped face was never looked at. Reporting them together would
+    # repeat the "could not decode" / "no face found" confusion this project has
+    # already had to fix once.
+    #
+    # `measured: yes` 2026-09-01 on the deployed service: a 24-face group
+    # photograph (Solvay 1927) crashed the container three times and never
+    # returned a result -- 196 s, three health outages, no verdict. A 6-face
+    # photo completes in 5.5 s. Each face is a separate B7 forward pass at
+    # 380x380 and the container has 1000 MB shared across five processes, so
+    # cost has to be bounded somewhere. Returning a partial answer that SAYS it
+    # is partial beats returning nothing after three minutes.
+    #
+    # Highest confidence first, because that is the ordering the gate already
+    # uses. This does mean a manipulated face outside the top N is not examined,
+    # which is a real loss and is why the count is surfaced rather than hidden.
+    max_faces_scored: int = field(
+        default_factory=lambda: _int("DF_MAX_FACES_SCORED", 8)
+    )
     audio_chunk_seconds: float = field(
         default_factory=lambda: _float("DF_AUDIO_CHUNK_SECONDS", 3.0)
     )

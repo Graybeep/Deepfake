@@ -1130,6 +1130,79 @@ VIDEO_STREAM_MUTATIONS = [
     ),
 ]
 
+FACE_CAP_WITNESS = r"""
+import os
+os.environ["DF_MAX_FACES_SCORED"] = "3"
+from df.pipelines.extract import FaceCrop
+from df.workers import cpu_preprocess as cp
+from df.rollup import face_evidence
+
+# Confidences deliberately OUT of order: with them already descending,
+# sorted(reverse=True) and list(crops) are indistinguishable, and the
+# "keeps arbitrary faces" mutation reported NO-OP because the witness
+# could not tell them apart.
+CONF = [0.2, 0.9, 0.1, 0.7, 0.3, 0.95, 0.05, 0.5]
+crops = [FaceCrop(frame_index=0, face_index=i, data=b"x",
+                  confidence=CONF[i], bbox=(0, 0, 40, 40)) for i in range(8)]
+capped = []
+kept = cp._cap_faces(crops, capped, frame_index=0)
+print("kept            ->", [c.face_index for c in kept])
+print("capped count    ->", len(capped))
+
+ev = face_evidence([{"face_index": 0, "score": 1.0, "item_index": 0, "confidence": 0.9}],
+                   discarded={"detections_discarded": 2, "faces_capped": 7,
+                              "max_faces_scored": 8, "capped": [{"face_index": 9}],
+                              "discarded": [{"face_index": 5}]})
+print("discarded field ->", ev["detections_discarded"])
+print("capped field    ->", ev["faces_capped"], ev["capped_faces"])
+ev2 = face_evidence([{"face_index": 0, "score": 1.0, "item_index": 0, "confidence": 0.9}],
+                    discarded=None)
+print("absent -> capped->", ev2["faces_capped"])
+"""
+
+FACE_CAP_MUTATIONS = [
+    Mutation(
+        # No bound at all: back to the 24-face photo taking the container down
+        # three times and returning nothing.
+        label="cap removed (many-face photo unbounded again)",
+        file="src/df/workers/cpu_preprocess.py",
+        old="    if limit <= 0 or len(crops) <= limit:",
+        new="    if True:",
+        witness=FACE_CAP_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # Keep an arbitrary slice instead of the strongest detections, so the
+        # verdict depends on detector output order.
+        label="cap keeps arbitrary faces, not the highest confidence",
+        file="src/df/workers/cpu_preprocess.py",
+        old="    ranked = sorted(crops, key=lambda c: c.confidence, reverse=True)",
+        new="    ranked = list(crops)",
+        witness=FACE_CAP_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # THE dangerous one: report skipped faces as rejected. Tells a reader
+        # the detector judged those not to be faces when it never looked.
+        label="capped faces reported as gated (skipped reads as rejected)",
+        file="src/df/rollup.py",
+        old='        "faces_capped": disc.get("faces_capped"),',
+        new='        "faces_capped": disc.get("detections_discarded"),',
+        witness=FACE_CAP_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+    Mutation(
+        # Absent becomes 0: asserts nothing was skipped on a job where nobody
+        # measured. Same class as the model_version_id / NULL problem.
+        label="missing cap record reads as zero rather than unknown",
+        file="src/df/rollup.py",
+        old='        "faces_capped": disc.get("faces_capped"),',
+        new='        "faces_capped": disc.get("faces_capped", 0) or 0,',
+        witness=FACE_CAP_WITNESS,
+        test="tests/test_detection_gate.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1382,6 +1455,10 @@ if __name__ == "__main__":
     print("\nvideo frame streaming (the OOM and the decodability trap)")
     vs_bad = run_all(VIDEO_STREAM_MUTATIONS)
     print(f"  {len(VIDEO_STREAM_MUTATIONS)} mutation(s), {vs_bad} did not produce RED")
+
+    print("\nface cap (cost bound, recorded apart from gating)")
+    fc_bad = run_all(FACE_CAP_MUTATIONS)
+    print(f"  {len(FACE_CAP_MUTATIONS)} mutation(s), {fc_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

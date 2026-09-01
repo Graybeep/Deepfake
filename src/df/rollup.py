@@ -91,6 +91,14 @@ def face_evidence(
         "detections_discarded": disc.get("detections_discarded"),
         "detection_confidence_ratio": disc.get("detection_confidence_ratio"),
         "discarded_faces": disc.get("discarded") or [],
+        # Faces that were never scored, to bound cost. NOT the same as
+        # discarded: those were judged not to be faces, these were skipped. A
+        # non-zero value here means the verdict rests on a SUBSET of the faces
+        # present, which a reader has to be able to see -- worst-case rollup
+        # over a subset can miss the one manipulated face.
+        "faces_capped": disc.get("faces_capped"),
+        "max_faces_scored": disc.get("max_faces_scored"),
+        "capped_faces": disc.get("capped") or [],
         "faces_total": len(faces),
         "faces_reported": min(len(ranked), limit),
         # How many of those faces carry a recorded size. Every row written

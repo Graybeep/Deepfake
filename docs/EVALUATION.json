@@ -1,0 +1,302 @@
+[
+ {
+  "source": "anthony",
+  "variant": "original",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 0,
+  "discarded": 0,
+  "coverage": null,
+  "_seconds": 2.26
+ },
+ {
+  "source": "anthony",
+  "variant": "jpeg_q70",
+  "band": "leaning_authentic",
+  "score": 27.0014,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 1.43
+ },
+ {
+  "source": "anthony",
+  "variant": "jpeg_q40",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 0.0,
+  "_seconds": 1.96
+ },
+ {
+  "source": "anthony",
+  "variant": "resize_50",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 0,
+  "discarded": 0,
+  "coverage": null,
+  "_seconds": 3.11
+ },
+ {
+  "source": "anthony",
+  "variant": "screenshot_sim",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 0,
+  "discarded": 0,
+  "coverage": null,
+  "_seconds": 3.57
+ },
+ {
+  "source": "curie",
+  "variant": "original",
+  "band": "likely_authentic",
+  "score": 2.1165,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 1.4
+ },
+ {
+  "source": "curie",
+  "variant": "jpeg_q70",
+  "band": "likely_authentic",
+  "score": 1.5672,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 2.15
+ },
+ {
+  "source": "curie",
+  "variant": "jpeg_q40",
+  "band": "likely_authentic",
+  "score": 1.8478,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 2.93
+ },
+ {
+  "source": "curie",
+  "variant": "resize_50",
+  "band": "likely_authentic",
+  "score": 1.969,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.51
+ },
+ {
+  "source": "curie",
+  "variant": "screenshot_sim",
+  "band": "likely_authentic",
+  "score": 2.6147,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.79
+ },
+ {
+  "source": "douglass",
+  "variant": "original",
+  "band": "leaning_manipulated",
+  "score": 73.3649,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 1.73
+ },
+ {
+  "source": "douglass",
+  "variant": "jpeg_q70",
+  "band": "leaning_manipulated",
+  "score": 75.6771,
+  "faces_total": 2,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 4.18
+ },
+ {
+  "source": "douglass",
+  "variant": "jpeg_q40",
+  "band": "likely_manipulated",
+  "score": 90.5918,
+  "faces_total": 1,
+  "discarded": 1,
+  "coverage": 1.0,
+  "_seconds": 1.48
+ },
+ {
+  "source": "douglass",
+  "variant": "resize_50",
+  "band": "likely_manipulated",
+  "score": 87.4223,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 2.47
+ },
+ {
+  "source": "douglass",
+  "variant": "screenshot_sim",
+  "band": "leaning_manipulated",
+  "score": 69.6678,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.7
+ },
+ {
+  "source": "einstein",
+  "variant": "original",
+  "band": "likely_authentic",
+  "score": 0.6465,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 4.18
+ },
+ {
+  "source": "einstein",
+  "variant": "jpeg_q70",
+  "band": "likely_authentic",
+  "score": 0.7425,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 1.54
+ },
+ {
+  "source": "einstein",
+  "variant": "jpeg_q40",
+  "band": "likely_authentic",
+  "score": 0.6544,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 5.13
+ },
+ {
+  "source": "einstein",
+  "variant": "resize_50",
+  "band": "likely_authentic",
+  "score": 0.7409,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.72
+ },
+ {
+  "source": "einstein",
+  "variant": "screenshot_sim",
+  "band": "likely_authentic",
+  "score": 0.6504,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.09
+ },
+ {
+  "source": "group",
+  "variant": "screenshot_sim",
+  "band": "likely_manipulated",
+  "score": 92.2766,
+  "faces_total": 4,
+  "discarded": 1,
+  "coverage": 1.0,
+  "_seconds": 5.84
+ },
+ {
+  "source": "tesla",
+  "variant": "original",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 2,
+  "discarded": 0,
+  "coverage": 0.0,
+  "_seconds": 5.22
+ },
+ {
+  "source": "tesla",
+  "variant": "resize_50",
+  "band": "undetermined",
+  "score": null,
+  "faces_total": 1,
+  "discarded": 1,
+  "coverage": 0.0,
+  "_seconds": 3.37
+ },
+ {
+  "source": "twain",
+  "variant": "original",
+  "band": "likely_authentic",
+  "score": 1.5382,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.8
+ },
+ {
+  "source": "twain",
+  "variant": "jpeg_q70",
+  "band": "likely_authentic",
+  "score": 1.3192,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.39
+ },
+ {
+  "source": "twain",
+  "variant": "jpeg_q40",
+  "band": "likely_authentic",
+  "score": 1.509,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 3.51
+ },
+ {
+  "source": "twain",
+  "variant": "resize_50",
+  "band": "likely_authentic",
+  "score": 1.0894,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 9.25
+ },
+ {
+  "source": "twain",
+  "variant": "screenshot_sim",
+  "band": "likely_authentic",
+  "score": 1.6997,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 4.15
+ },
+ {
+  "source": "anthony+curie",
+  "variant": "composite",
+  "band": "likely_authentic",
+  "score": 5.2361,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 2.5
+ },
+ {
+  "source": "curie+douglass",
+  "variant": "composite",
+  "band": "likely_manipulated",
+  "score": 90.1937,
+  "faces_total": 1,
+  "discarded": 0,
+  "coverage": 1.0,
+  "_seconds": 2.91
+ }
+]
