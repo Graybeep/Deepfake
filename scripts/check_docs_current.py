@@ -49,6 +49,19 @@ DOCUMENTS = [
             re.compile(r"(\d+)\s+tests, no infrastructure required"),
         ],
     ),
+    (
+        # The landing page states the count twice -- once in the data-count
+        # attribute the counter animates toward, once as the text that renders
+        # with JS off. Both are checked, by two single-group patterns rather
+        # than one two-group pattern, because findall() with several groups
+        # yields tuples and the loop below int()s whatever it gets. Two claims
+        # in one element is precisely how a number gets half-updated.
+        pathlib.Path("web") / "landing.html",
+        [
+            re.compile(r'<b data-count="(\d+)">\d+</b><span>Tests passing'),
+            re.compile(r'<b data-count="\d+">(\d+)</b><span>Tests passing'),
+        ],
+    ),
 ]
 
 

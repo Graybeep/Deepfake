@@ -631,6 +631,38 @@ per-job and derived per-model, so it reports this correctly without special-casi
   better than nothing, but compliance is a legal determination this codebase doesn't
   get to assert.
 
+The list above is now **mechanically enforced for the landing page**, which is
+the most likely place for one of these claims to reappear: marketing copy is
+written to sound confident, and "adversarially robust" is the phrase someone
+reaches for while tightening a caveat. `tests/test_landing_page.py` asserts the
+forbidden phrases absent from `web/landing.html` **and the caveats present** --
+the second half is not decoration, since an absence-only check passes against an
+empty file, a moved file, or a read that silently returned "". `measured: yes`:
+under a mutation that deletes a caveat without adding a forbidden word, all nine
+forbidden-phrase cases stay green and only the positive controls go red.
+
+Enforcement stops at that one file. Code, comments and the other documents are
+still a person's job.
+
+## Landing page and the root route
+`/` is content-negotiated: `Accept: text/html` serves `web/landing.html`, anything
+else gets the JSON service identity it always returned, byte for byte. The JSON is
+also at `/v1/service` unconditionally, so that contract does not depend on an
+Accept header. A root URL that returns JSON reads as a broken deploy to anyone who
+is not a developer -- reported first-hand, which is why this exists.
+
+The page is self-contained: no build step, no framework, no CDN. Google Fonts is
+the only external origin and it degrades to a fallback stack on its own. Two
+failure modes are covered deliberately, because the reveal animation makes script
+load-bearing for READING the page: a `<noscript>` block restores visibility when
+JS is disabled, and a 2s timer restores it when JS is enabled but the script
+throws -- which `<noscript>` cannot see. Without both, a script failure serves a
+full document that renders blank.
+
+Design tokens come from the `ui-ux-pro-max` skill and are recorded in
+`design-system/deepfake-detection/MASTER.md`. Two deviations from the generated
+system are noted in the page header, with reasons.
+
 ## Testing status
 TTL deletion is asserted against the storage backend, not a mock's call log — good,
 keep it that way. The hold-flag gap is closed: `tests/test_retention_hold_gate.py`

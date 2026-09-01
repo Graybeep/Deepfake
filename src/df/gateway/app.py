@@ -613,14 +613,45 @@ def demo_ui() -> Response:
     return Response(content=page.read_text(encoding="utf-8"), media_type="text/html")
 
 
-@app.get("/")
-def root() -> dict:
-    """Service identity and where to go next.
+@app.get("/", include_in_schema=False)
+def root(request: Request) -> Response:
+    """The landing page for browsers, the service identity for everything else.
 
-    Exists because the bare URL returned FastAPI's `{"detail":"Not Found"}`,
-    which is correct -- there is no root route -- and reads as a broken deploy to
-    anyone who clicks it. A judge or a teammate opening the API URL should see
-    what this is and where the interesting endpoints are, not a 404.
+    Content-negotiated rather than split across two paths, because the bare URL
+    is what gets pasted into a chat and clicked, and what a human wants from it
+    is not what a script wants. `Accept: text/html` -> the page; anything else
+    (curl, a health probe, a client library) -> the JSON it used to get, byte for
+    byte. Nothing that consumed this endpoint before has to change.
+
+    Returning JSON here was already a fix for a worse bug -- the bare URL used to
+    404 -- but a JSON blob still reads as a broken deploy to anyone who is not a
+    developer, which was reported first-hand. The JSON also stays available
+    unconditionally at /v1/service, so "what does this service say it is" never
+    depends on guessing an Accept header right.
+    """
+    if "text/html" in request.headers.get("accept", ""):
+        page = pathlib.Path(__file__).resolve().parents[3] / "web" / "landing.html"
+        if page.is_file():
+            return Response(
+                content=page.read_text(encoding="utf-8"), media_type="text/html"
+            )
+        # Not bundled in this image: fall through to JSON rather than 404. The
+        # service is up either way, and saying so is more useful than an error.
+    return JSONResponse(_service_identity())
+
+
+@app.get("/v1/service")
+def service_identity() -> dict:
+    """The service identity, unconditionally, for callers that want it as data.
+
+    Same payload the root path serves to non-browsers. Exists so that contract
+    does not rest on content negotiation.
+    """
+    return _service_identity()
+
+
+def _service_identity() -> dict:
+    """What this is and where to go next.
 
     Deliberately says nothing about a specific job and takes no input, so it is
     safe to hand to anyone.

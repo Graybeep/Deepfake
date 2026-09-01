@@ -701,6 +701,141 @@ RATELIMIT_MUTATIONS = [
     ),
 ]
 
+LANDING_ROUTE_WITNESS = r"""
+import pathlib
+from df.gateway import app as g
+
+R = lambda a: type("R", (), {"headers": {"accept": a}})()
+for accept in ("text/html", "*/*", "application/json"):
+    print(f"{accept:18} -> {g.root(R(accept)).media_type}")
+
+# The missing-page branch only differs when the page is absent, so make it
+# absent rather than trusting that the mutation is observable with it present.
+pathlib.Path.is_file = lambda self: False
+try:
+    print(f"{'page missing':18} -> {g.root(R('text/html')).media_type}")
+except Exception as exc:
+    print(f"{'page missing':18} -> raised {type(exc).__name__}")
+"""
+
+LANDING_COPY_WITNESS = r"""
+import pathlib, re
+
+page = pathlib.Path("web/landing.html").read_text(encoding="utf-8")
+low = page.lower()
+print("noscript block + its rule          ->",
+      bool(re.search(r"<noscript>\s*<style>.*?\.reveal\s*\{\s*opacity:1", page, re.S)))
+print("failsafe delay ms                ->", re.findall(r"failsafe = setTimeout\(.*?\}, (\d+)\);", page, re.S))
+print("forbidden 'adversarially robust' ->", "adversarially robust" in low)
+print("caveat 'not a probability'       ->", "not a probability" in low)
+print("caveat 'not production-validated'->", "not production-validated" in low)
+print("percentages rendered as text     ->", re.findall(r">\s*(\d+(?:\.\d+)?%)\s*<", page))
+print("emoji codepoints                 ->",
+      sum(1 for c in page if 0x1F300 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF))
+"""
+
+# The copy mutations target web/landing.html, which is production source in the
+# only sense that matters here: it is the artifact a user reads, and the claims
+# on it are the thing CLAUDE.md forbids. Mutating the test's expectations would
+# prove nothing; mutating the page proves the guard reads the real file.
+LANDING_MUTATIONS = [
+    Mutation(
+        # Serve HTML to everyone. The regression that matters: every scripted
+        # caller of `/` -- curl, a probe, a client library -- silently starts
+        # receiving a web page instead of the JSON it parses.
+        label="content negotiation ignored, HTML served to every caller",
+        file="src/df/gateway/app.py",
+        old='    if "text/html" in request.headers.get("accept", ""):',
+        new="    if True:",
+        witness=LANDING_ROUTE_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # The other direction, and one direction alone would look covered:
+        # this turns only the browser case red while the four JSON cases stay
+        # green, exactly as CLAUDE.md's both-directions rule predicts.
+        label="content negotiation inverted, browsers get JSON",
+        file="src/df/gateway/app.py",
+        old='    if "text/html" in request.headers.get("accept", ""):',
+        new="    if False:",
+        witness=LANDING_ROUTE_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # Read the page whether or not it exists. With web/ bundled this is
+        # invisible, which is why the witness unsets is_file: an image built
+        # without the page would 500 on its root URL instead of serving JSON.
+        label="missing page read anyway (root 500s instead of falling back)",
+        file="src/df/gateway/app.py",
+        old="        if page.is_file():",
+        new="        if True:",
+        witness=LANDING_ROUTE_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # A forbidden claim reappears in marketing copy. This is the realistic
+        # failure: the honest caveat gets rewritten into a boast by someone
+        # tightening the prose, and nothing in the codebase would notice.
+        label="forbidden claim in copy ('adversarially robust')",
+        file="web/landing.html",
+        old="<b>Not robust to adversarial input</b>",
+        new="<b>Adversarially robust</b>",
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # Deletes a caveat without adding a forbidden phrase. The
+        # forbidden-phrase cases all stay GREEN under this -- only the
+        # positive-control cases catch it. That is the entire argument for
+        # having them: an absence-only suite is green against a page that
+        # simply stopped saying anything.
+        label="caveat quietly dropped (no forbidden word added)",
+        file="web/landing.html",
+        old="<b>A score is not a probability</b>",
+        new="<b>A score is a verdict</b>",
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # An uncalibrated score rendered as a probability. One character.
+        label="score rendered as a percentage (69.53 -> 69.53%)",
+        file="web/landing.html",
+        old='<p class="row-score o">69.53</p>',
+        new='<p class="row-score o">69.53%</p>',
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # Kill the no-JS fallback. With script disabled every .reveal stays at
+        # opacity 0, so the page serves a full document that renders blank.
+        label="noscript fallback removed (page blank without JS)",
+        file="web/landing.html",
+        old="<noscript><style>",
+        new="<template><style>",
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # A failsafe that fires in 24h is not a failsafe. Catches the weaker
+        # form of the test that only greps for the identifier.
+        label="failsafe reveal delayed to 24h (never fires in practice)",
+        file="web/landing.html",
+        old="  }, 2000);",
+        new="  }, 86400000);",
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # Emoji standing in for an icon, against the design system's checklist.
+        label="emoji used as an icon instead of SVG",
+        file="web/landing.html",
+        old='<span class="pipe-ico"><svg aria-hidden="true"><use href="#i-video"/></svg></span>',
+        new='<span class="pipe-ico">\U0001F3AC</span>',
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -941,3 +1076,7 @@ if __name__ == "__main__":
     print("\ndetection gate")
     g_bad = run_all(GATE_MUTATIONS)
     print(f"  {len(GATE_MUTATIONS)} mutation(s), {g_bad} did not produce RED")
+
+    print("\nlanding page (content negotiation, forbidden claims in copy)")
+    l_bad = run_all(LANDING_MUTATIONS)
+    print(f"  {len(LANDING_MUTATIONS)} mutation(s), {l_bad} did not produce RED")
