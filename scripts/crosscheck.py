@@ -163,7 +163,11 @@ def main() -> int:
     check("the pipeline count is not stale",
           "Two routes in" not in landing and "Three routes in" not in landing)
     check("Image is marked live in the app", "Live in the app" in landing)
-    check("Video is marked API only", "API only" in landing)
+    # Video was removed from the page on 2026-09-01. This previously asserted it
+    # was "marked API only", which was correct while the card existed -- a check
+    # that outlives the thing it describes reports a failure against a page that
+    # is right, which is what happened on the first run after the removal.
+    check("video is not advertised", "video" not in copy.lower())
     for phrase in FORBIDDEN:
         check(f"no forbidden claim: {phrase!r}", phrase.lower() not in copy.lower())
     for phrase in NEGATED_ONLY:
