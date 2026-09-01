@@ -17,9 +17,34 @@ public.**
 | `DF_INFERENCE_BACKEND` | `torch` | Real weights; the default is the stub |
 | `DF_FACE_WEIGHTS` | `/models/weights/dfdc_b7_ns_seed111.pth` | Baked into the image |
 | `PORT` | injected by the platform | The launcher reads it; do not hardcode 8000 |
+| `DF_TRUSTED_PROXY_HOPS` | `2` on Railway | Proxies between client and app. **Determine it, do not guess** — see below |
 
 `DF_AUDIO_WEIGHTS` stays unset — audio has no checkpoint and falls back to the
 stub, which is the documented mixed state and fails closed.
+
+## Determining `DF_TRUSTED_PROXY_HOPS`
+
+Get this wrong and rate limiting silently does nothing — no error, no warning,
+just 201s forever. It happened here twice: first at the default 0 (socket peer,
+which is a rotating proxy), then at a guessed 1.
+
+`GET /v1/whoami` exists to settle it. It returns the resolved identity, the
+socket peer, and the forwarding headers actually received:
+
+```json
+{"identity":"ip:61.12.82.214","socket_peer":"100.64.0.3","trusted_proxy_hops":2,
+ "forwarding_headers":{"x-forwarded-for":"61.12.82.214, 152.233.15.123", ...}}
+```
+
+Count the entries in `x-forwarded-for` that were added by infrastructure and set
+hops so `identity` lands on the real client. On Railway the header is
+`<client>, <edge>` — the edge appends its **own** address — so the answer is 2,
+not the 1 you would guess from "there is one proxy".
+
+Verify with a burst: 45 rapid `POST /v1/jobs` should produce 429s.
+Then verify spoofing fails: send your own `X-Forwarded-For` and confirm
+`identity` is unchanged. Taking the *leftmost* entry would let any caller choose
+its own bucket, which is worse than no limiting because it looks like protection.
 
 ## Sizing
 

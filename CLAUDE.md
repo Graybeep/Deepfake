@@ -155,6 +155,14 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   this runs on every request, and collapsing callers into one bucket would 429
   everyone. IPv4-mapped IPv6 is unmapped, or `::ffff:1.2.3.4` and `1.2.3.4` get
   separate buckets and an allowance doubles.
+  **`measured: yes` 2026-09-01 on the deployed service: hops=2 for Railway**, and
+  the burst produced a first 429 at request 42 (capacity 30 plus ~12 refilled
+  during the burst), with a client-supplied `X-Forwarded-For` correctly ignored.
+  Two is not the obvious answer: Railway's header is `<client>, <edge>` because
+  the edge appends its OWN address, and that address rotates as well, so hops=1
+  bucketed on a rotating value and limited nothing. Guessing failed silently
+  twice; `GET /v1/whoami` reports the resolved identity and the headers behind it
+  so the count can be read off rather than guessed.
   The bug it replaced, for the record: **effectively DISABLED behind a
   platform proxy** (`measured: yes` 2026-09-01 on Railway: 45 rapid POSTs, 45x
   201, no 429). `identity_of()` keys on the socket peer, and its docstring

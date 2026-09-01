@@ -83,30 +83,26 @@ verdict."*
 - Audio falls back to the stub even with real face weights loaded, and reports
   `placeholder`. That mixed state is deliberate and fails closed.
 
-## Known gap: rate limiting does not work in this deployment
+## Rate limiting: fixed and verified on the deployed service
 
-**Do not claim ingress rate limiting works.** It is Tier 1 in CLAUDE.md and it is
-real in the compose stack, but it is effectively disabled on the platform.
+It was effectively disabled earlier tonight — the limiter keyed on the socket
+peer, which behind Railway is a rotating proxy pool, so 45 rapid requests spread
+across 20+ near-fresh buckets and never limited anything.
 
-`measured: yes` 2026-09-01: 45 rapid `POST /v1/jobs` returned 45x 201, no 429.
+Now keyed on the real client via `DF_TRUSTED_PROXY_HOPS=2`. `measured: yes`
+2026-09-01 against the live URL:
 
-The cause is the one `identity_of()`'s own docstring warns about, worse than it
-predicted. The limiter keys on the socket peer, which behind a proxy is the
-proxy. The docstring assumed that means everything buckets to *one* proxy;
-in fact Railway's pool rotates. The gateway saw **20+ distinct source IPs**
-(`100.64.0.2`-`100.64.0.22`), so the 45 requests split across them, at most 10
-to any single bucket of 30. Nothing ever accumulates.
+- 45 rapid `POST /v1/jobs` → **first 429 at request 42**, `Retry-After: 2`.
+  42 is the arithmetic: capacity 30, plus ~12 refilled at 0.5/s during the burst.
+- A client sending `X-Forwarded-For: 1.2.3.4, 5.6.7.8, 9.9.9.9` is **ignored** —
+  identity still resolves to its real address, so nobody can pick their own
+  bucket.
 
-Not fixed tonight, deliberately: it is not demo-critical (nobody is going to
-flood it), and a bad `X-Forwarded-For` parse could 429 every request, which
-would be. The fix is to read a *trusted* forwarded-for header — trusting it
-unconditionally lets any client spoof its own identity and bypass the limit
-entirely, which is worse than no limiting.
-
-**If asked:** *"Rate limiting is implemented and tested against the compose
-stack. On this platform it keys off the socket peer, which is a rotating proxy
-pool, so it isn't effective here — it needs a trusted forwarded-for header wired
-to the ingress, and we didn't want to change that hours before a demo."*
+**Why 2 and not 1:** Railway's `X-Forwarded-For` is `<client>, <edge>` — the edge
+appends its *own* address, and that address rotates too. One hop bucketed on the
+rotating edge; two hops reaches the client. `GET /v1/whoami` shows the resolved
+identity and the headers behind it, which is how this was determined rather than
+guessed — the first guess was wrong and failed silently.
 
 ## Do not
 

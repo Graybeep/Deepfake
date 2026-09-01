@@ -644,6 +644,38 @@ def root() -> dict:
     }
 
 
+@app.get("/v1/whoami")
+def whoami(request: Request) -> dict:
+    """What the rate limiter thinks you are, and the headers it decided from.
+
+    Operational, not decorative: `DF_TRUSTED_PROXY_HOPS` cannot be chosen
+    correctly without seeing which forwarding headers a platform actually sets
+    and how many entries they carry. Guessing produced a deploy where limiting
+    silently did nothing, which is the failure this endpoint exists to make
+    visible.
+
+    Only forwarding headers are echoed, and only to the caller they describe --
+    a client learning its own address is not a disclosure. No other header is
+    returned, so an Authorization or cookie cannot leak through here.
+    """
+    forwarding = {
+        h: request.headers.get(h)
+        for h in ("x-forwarded-for", "x-real-ip", "x-envoy-external-address",
+                  "cf-connecting-ip", "forwarded", "true-client-ip")
+        if request.headers.get(h)
+    }
+    return {
+        "identity": identity_of(request),
+        "socket_peer": request.client.host if request.client else None,
+        "trusted_proxy_hops": settings.trusted_proxy_hops,
+        "forwarding_headers": forwarding,
+        "ratelimit": {
+            "capacity": settings.ratelimit_capacity,
+            "refill_per_sec": settings.ratelimit_refill_per_sec,
+        },
+    }
+
+
 @app.get("/healthz")
 def healthz() -> JSONResponse:
     """Liveness for the gateway AND the workers behind it.
