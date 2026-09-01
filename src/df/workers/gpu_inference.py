@@ -9,6 +9,7 @@ model (one model_version_id); audio uses its own model.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from df import storage as storage_mod
@@ -21,7 +22,33 @@ from df.workers.loop import configure_logging, run_worker
 
 log = logging.getLogger("df.worker.gpu")
 
-BATCH_SIZE = 32
+
+def _int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+# How many crops go through the model at once.
+#
+# This is a MEMORY bound, not a throughput knob, and 32 was a throughput number.
+# Peak RSS scales with batch size, so a large batch makes memory scale with the
+# number of faces in the photo -- which is attacker-and-judge-controlled input.
+#
+# `measured: yes` 2026-09-01, B7 at 380px on CPU:
+#     loaded 836MB · 2 crops 867MB · 4 crops 1101MB · 6 crops 1359MB · 8 crops 1626MB
+#
+# A six-face group photo went through as one batch of six and OOM-killed a 2GB
+# container on Railway: the supervisor took the container down, the platform
+# restarted it, and the in-flight job stranded at status=inference. The user saw
+# a timeout. Nothing in the logs said "out of memory" -- just a clean boot,
+# because SIGKILL leaves no traceback.
+#
+# At 2 the peak is ~870MB no matter how many faces are in the frame: a 20-face
+# photo runs 10 sequential batches instead of one enormous one. On 2 cores the
+# throughput cost is near zero, because a larger batch was not buying
+# parallelism there anyway.
+BATCH_SIZE = _int("DF_INFERENCE_BATCH_SIZE", 2)
 
 
 def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, status: JobStatus) -> None:
