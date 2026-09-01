@@ -306,7 +306,12 @@ function render(d) {
     `${ev.faces_total ?? d.face_count ?? 0} ${
       (ev.faces_total ?? d.face_count ?? 0) === 1 ? 'face' : 'faces'} checked`,
     gated.length ? `${gated.length} weak detection${gated.length > 1 ? 's' : ''} skipped` : '',
-    d.media_deleted ? 'your photo was deleted' : 'photo not yet deleted',
+    // media_deleted can be false for a moment after a job reports complete:
+    // the router records the verdict BEFORE destroying the media, so a crash
+    // between the two loses the photo but keeps the finding. That ordering is
+    // deliberate, so this text has to describe a pending delete rather than a
+    // failed one.
+    d.media_deleted ? 'your photo was deleted' : 'deleting your photo…',
   ].filter(Boolean).join(' &nbsp;·&nbsp; ');
 
   $('out').innerHTML = `

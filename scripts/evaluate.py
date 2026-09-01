@@ -166,7 +166,11 @@ class Client:
             except urllib.error.HTTPError as e:
                 if e.code != 429:
                     raise
-            time.sleep(2)
+            # 0.25s, not 2s: a coarse poll quantises the reported duration into
+            # multi-second buckets and makes the timing column meaningless. Measured
+            # the hard way -- a 3s poll elsewhere made a 2.5s job look like 8.3s and
+            # I reported a latency regression that did not exist.
+            time.sleep(0.25)
         return {"job_id": jid, "status": "timeout", "_seconds": round(time.time() - t0, 2)}
 
 
