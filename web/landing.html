@@ -28,7 +28,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deepfake Detection — Don't trust it. Test it.</title>
-<meta name="description" content="Forensic analysis for images and video. Per-face evidence, honest caveats, and a score that tells you when it doesn't know.">
+<meta name="description" content="Forensic analysis for photographs. Per-face evidence, honest caveats, and a score that tells you when it doesn't know.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -189,8 +189,10 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
 .head h2 em{font-style:normal;color:var(--primary)}
 
 /* ── pipeline cards ───────────────────────────────────────────────────── */
-.grid-2up{display:grid;gap:var(--space-3);grid-template-columns:1fr}
-@media(min-width:760px){.grid-2up{grid-template-columns:repeat(2,1fr)}}
+/* One pipeline card since video was removed from the product. A lone card
+   in a two-column grid stretches to half width and reads as a rendering
+   fault, so it is centred at a readable width instead. */
+.grid-2up{display:grid;gap:var(--space-3);grid-template-columns:1fr;max-width:620px}
 
 .pipe{display:flex;flex-direction:column;gap:var(--space-2);
   transition:transform var(--t-mid) var(--ease-back),border-color var(--t-mid)}
@@ -324,9 +326,6 @@ footer a:hover{color:var(--primary)}
   <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
-  <symbol id="i-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-    stroke-linecap="round" stroke-linejoin="round">
-    <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M2 15h20M7 4v16M17 4v16"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">
     <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/>
@@ -378,7 +377,7 @@ footer a:hover{color:var(--primary)}
     </div>
 
     <div class="stats reveal" style="--d:240ms">
-      <div class="stat"><b data-count="2">2</b><span>Pipelines</span></div>
+      <div class="stat"><b data-count="5">5</b><span>Pipeline stages</span></div>
       <div class="stat"><b data-count="2.1" data-suffix="s">2.1s</b><span>Per image</span></div>
       <div class="stat"><b data-count="480">480</b><span>Tests passing</span></div>
       <div class="stat"><b data-count="5">5</b><span>Score bands</span></div>
@@ -390,11 +389,11 @@ footer a:hover{color:var(--primary)}
 <section id="pipelines">
   <div class="wrap">
     <div class="head reveal">
-      <p class="eyebrow">The circuits</p>
-      <h2>However it comes in.<br><em>One honest verdict out.</em></h2>
-      <p class="lede">Each path runs its own preprocessing and converges on the same
-        aggregation, band routing and retention — same audit row, same caveats, same
-        rules. Photos run in the app; video runs through the API on short clips.</p>
+      <p class="eyebrow">The pipeline</p>
+      <h2>Every face checked.<br><em>One honest verdict out.</em></h2>
+      <p class="lede">Ingest, face extraction, alignment, scoring, then band routing and
+        retention — every upload takes the same path and lands on the same audit row,
+        with the same caveats and the same rules.</p>
     </div>
 
     <div class="grid-2up">
@@ -411,19 +410,6 @@ footer a:hover{color:var(--primary)}
           <span class="badge ok">Live in the app</span></div>
       </article>
 
-      <article class="card pipe reveal" style="--d:60ms">
-        <div class="pipe-top">
-          <span class="pipe-ico"><svg aria-hidden="true"><use href="#i-video"/></svg></span>
-          <div><h3>Video</h3><p class="n">7 stages</p></div>
-        </div>
-        <ul class="steps">
-          <li><i>01</i>Ingest</li><li><i>02</i>Frame sample</li><li><i>03</i>Face extract</li>
-          <li><i>04</i>Align</li><li><i>05</i>EfficientNet-B7</li><li><i>06</i>Aggregate</li>
-          <li><i>07</i>Route</li>
-        </ul>
-        <div class="pipe-foot"><span>Min 3 frames to score</span>
-          <span class="badge api">API only &middot; short clips</span></div>
-      </article>
 
     </div>
   </div>
@@ -516,7 +502,7 @@ footer a:hover{color:var(--primary)}
       <article class="card model reveal">
         <div class="model-top">
           <span class="avatar"><svg aria-hidden="true"><use href="#i-chip"/></svg></span>
-          <div><h3>Face model</h3><p class="role">Shared by the video and image pipelines</p></div>
+          <div><h3>Face model</h3><p class="role">Scores every face this service examines</p></div>
         </div>
         <span class="badge warn">Research checkpoint</span>
         <ul class="specs">

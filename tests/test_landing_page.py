@@ -272,5 +272,20 @@ def test_audio_is_not_advertised(copy):
     standing is exactly the drift this repo keeps rediscovering.
     """
     assert "audio" not in copy.lower()
-    assert "three routes" not in copy.lower()
-    assert "2" in copy and "pipelines" in copy.lower()
+    assert "video" not in copy.lower(), (
+        "video is no longer offered; the page must not advertise it"
+    )
+
+    # NO PIPELINE COUNT AT ALL, rather than a specific one.
+    #
+    # This asserted `"2" in copy and "pipelines" in copy` while the page carried
+    # a "2 Pipelines" stat. When video was removed the stat became "5 Pipeline
+    # stages" -- and the assertion still passed, satisfied by the nav link
+    # labelled "Pipelines" and by an incidental digit 2 elsewhere in the copy.
+    # It was guarding nothing. A count in the copy has now gone stale twice
+    # (three -> two -> one), so the property worth pinning is that no count is
+    # claimed, not that a particular one is.
+    low = copy.lower()
+    for stale in ("three routes", "two routes", "three pipelines", "two pipelines",
+                  "1 pipelines", "one pipelines"):
+        assert stale not in low, f"stale or ungrammatical count claim: {stale!r}"

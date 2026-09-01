@@ -126,7 +126,8 @@ API gave 7 log-mel spectrogram chunks, all 7 scored, coverage 1.0, `uncertain`
 at 40.2638, media deleted. Every stage real, only the scorer a SHA-256 of the
 bytes -- and the advisory says exactly that.
 
-**Video**, if asked: "The video pipeline is real and produces correct results,
+**Video is no longer on the page at all** (removed 2026-09-01), so it should not
+come up unprompted. If it does: "The video pipeline is real and produces correct results,
 but it is not reliable on our current host, so it is not in the product. The
 frame sampler materialises every sampled frame in memory at once, and this
 container is already holding a 66-million-parameter model, so whether a clip
