@@ -143,7 +143,15 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   never traverse the gateway — ingress rate limiting never sees them — so a
   `content-length-range` condition in the policy is the only place
   DF_MAX_UPLOAD_BYTES can be enforced at all.
-- Rate limiting on ingress.
+- Rate limiting on ingress. **Works in compose; effectively DISABLED behind a
+  platform proxy** (`measured: yes` 2026-09-01 on Railway: 45 rapid POSTs, 45x
+  201, no 429). `identity_of()` keys on the socket peer, and its docstring
+  already warned that behind a proxy this buckets to the proxy — the reality is
+  worse, because the proxy pool ROTATES. The gateway observed 20+ distinct
+  source IPs (100.64.0.2-.22), so requests spread across many near-fresh
+  buckets and nothing accumulates. The fix is a TRUSTED forwarded-for header;
+  trusting `X-Forwarded-For` unconditionally is worse than no limiting, since
+  any client could then spoof its own bucket.
 - Postgres job row: hash + model_version_id + aggregation method/params. This is the
   whole audit trail — treat it as such. That cuts both ways: anything qualifying the
   result belongs on this row, not only in a side table. `model_version_id` is derived

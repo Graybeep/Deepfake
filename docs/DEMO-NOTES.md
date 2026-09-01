@@ -83,6 +83,31 @@ verdict."*
 - Audio falls back to the stub even with real face weights loaded, and reports
   `placeholder`. That mixed state is deliberate and fails closed.
 
+## Known gap: rate limiting does not work in this deployment
+
+**Do not claim ingress rate limiting works.** It is Tier 1 in CLAUDE.md and it is
+real in the compose stack, but it is effectively disabled on the platform.
+
+`measured: yes` 2026-09-01: 45 rapid `POST /v1/jobs` returned 45x 201, no 429.
+
+The cause is the one `identity_of()`'s own docstring warns about, worse than it
+predicted. The limiter keys on the socket peer, which behind a proxy is the
+proxy. The docstring assumed that means everything buckets to *one* proxy;
+in fact Railway's pool rotates. The gateway saw **20+ distinct source IPs**
+(`100.64.0.2`-`100.64.0.22`), so the 45 requests split across them, at most 10
+to any single bucket of 30. Nothing ever accumulates.
+
+Not fixed tonight, deliberately: it is not demo-critical (nobody is going to
+flood it), and a bad `X-Forwarded-For` parse could 429 every request, which
+would be. The fix is to read a *trusted* forwarded-for header — trusting it
+unconditionally lets any client spoof its own identity and bypass the limit
+entirely, which is worse than no limiting.
+
+**If asked:** *"Rate limiting is implemented and tested against the compose
+stack. On this platform it keys off the socket peer, which is a rotating proxy
+pool, so it isn't effective here — it needs a trusted forwarded-for header wired
+to the ingress, and we didn't want to change that hours before a demo."*
+
 ## Do not
 
 - **Do not redeploy.** A container restart puts a rollout between a judge and
