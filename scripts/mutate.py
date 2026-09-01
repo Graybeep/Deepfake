@@ -1264,6 +1264,56 @@ FALLBACK_MUTATIONS = [
     ),
 ]
 
+FLOOR_WITNESS = r"""
+from df.aggregation import AggregationParams, ScoredItem, aggregate_identity, aggregate
+
+print("default floor        ->", AggregationParams().min_confidence)
+weak = aggregate_identity(ScoredItem(index=0, score=56.7, confidence=0.171))
+print("weak face scored     ->", weak.score)
+tesla = aggregate_identity(ScoredItem(index=0, score=12.0, confidence=0.290))
+print("0.290 face scored    ->", tesla.score)
+# the mechanism must still work when a floor IS configured
+cfg = aggregate([ScoredItem(index=0, score=10.0, confidence=0.9),
+                 ScoredItem(index=1, score=95.0, confidence=0.05)],
+                AggregationParams(min_confidence=0.30))
+print("configured floor drop->", cfg.items_dropped_low_confidence)
+print("params report the key->", "min_confidence" in cfg.params, cfg.params.get("min_confidence"))
+"""
+
+FLOOR_MUTATIONS = [
+    Mutation(
+        # The absolute floor returns. measured: yes -- 0.30 discarded six of
+        # thirty images including tesla.jpg, an ordinary portrait at 0.290,
+        # turning scored verdicts into `undetermined`.
+        label="absolute confidence floor restored (weak real faces undetermined again)",
+        file="src/df/aggregation.py",
+        old='        return max(0.0, float(os.environ.get("DF_MIN_ITEM_CONFIDENCE", "0.0")))',
+        new='        return max(0.0, float(os.environ.get("DF_MIN_ITEM_CONFIDENCE", "0.30")))',
+        witness=FLOOR_WITNESS,
+        test="tests/test_aggregation.py",
+    ),
+    Mutation(
+        # Remove the drop mechanism entirely rather than defaulting it off, so a
+        # configured floor silently does nothing.
+        label="drop mechanism removed (a configured floor stops working)",
+        file="src/df/aggregation.py",
+        old="    kept = [i for i in items if i.confidence >= params.min_confidence]",
+        new="    kept = list(items)",
+        witness=FLOOR_WITNESS,
+        test="tests/test_aggregation.py",
+    ),
+    Mutation(
+        # Stop reporting the parameter. The audit row records what a score was
+        # computed under, and "min_confidence was 0.0" is a fact a dispute needs.
+        label="min_confidence dropped from the reported params",
+        file="src/df/aggregation.py",
+        old='            "min_confidence": self.min_confidence,',
+        new="",
+        witness=FLOOR_WITNESS,
+        test="tests/test_aggregation.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1524,6 +1574,10 @@ if __name__ == "__main__":
     print("\ndetection fallback (glasses, bad lighting)")
     fb_bad = run_all(FALLBACK_MUTATIONS)
     print(f"  {len(FALLBACK_MUTATIONS)} mutation(s), {fb_bad} did not produce RED")
+
+    print("\nabsolute confidence floor (removed 2026-09-01)")
+    fl_bad = run_all(FLOOR_MUTATIONS)
+    print(f"  {len(FLOOR_MUTATIONS)} mutation(s), {fl_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

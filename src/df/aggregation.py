@@ -12,7 +12,17 @@ score can be reproduced later. Changing a default here without bumping
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+
+def _min_item_confidence() -> float:
+    """Absolute confidence floor for aggregation. 0.0 = none, which is the
+    default; see AggregationParams.min_confidence for why."""
+    try:
+        return max(0.0, float(os.environ.get("DF_MIN_ITEM_CONFIDENCE", "0.0")))
+    except ValueError:
+        return 0.0
 
 AGGREGATION_METHOD = "weighted_trimmed_mean.v1"
 
@@ -34,7 +44,36 @@ class AggregationParams:
     trim_frac: float = 0.10
     # Items below this confidence contribute nothing. They are still recorded in
     # job_items -- dropped, not deleted, so the audit trail shows what was ignored.
-    min_confidence: float = 0.30
+    #
+    # DEFAULT 0.0: NO ABSOLUTE FLOOR. Changed 2026-09-01, and the reasoning is
+    # already in this repository -- it is the argument that replaced an absolute
+    # 0.3 DETECTION floor with a relative ratio: `_haar_confidence` is an
+    # unbounded cascade reject level divided by 10, so the quantity has no
+    # semantics and "no absolute floor is more justified than another".
+    #
+    # This floor was documented as never having fired (378 item rows, lowest
+    # confidence 0.6, all from the STUB extractor which produces 0.6/0.7/0.8 by
+    # construction). Real Haar on real photographs produces 0.044 to 1.000 with
+    # no gap anywhere near 0.3, so as soon as detection improved it started
+    # firing -- and what it destroyed was correct results.
+    #
+    # `measured: yes` 2026-09-01. A detection fallback for glasses and bad
+    # lighting took hard-case detection from 20/30 to 24/30, and this floor then
+    # discarded six of them, turning a scored verdict into `undetermined`:
+    #   glasses_gandhi 0.171 | lowlight_douglass 0.044 | lowlight_twain 0.098
+    #   shadow_twain 0.252 | shadow_douglass 0.300 | tesla.jpg 0.290
+    # `tesla.jpg` is the one that settles it: an ordinary portrait, no hard
+    # lighting, refused a verdict because two detections landed at 0.290.
+    #
+    # The RELATIVE gate in the CPU worker still runs and still drops detections
+    # below `DF_DETECTION_CONFIDENCE_RATIO` of the best in frame -- that is the
+    # mechanism for "is this a face at all", and it cannot empty a non-empty
+    # set. This floor was doing something different and unjustifiable: rejecting
+    # weakly-detected REAL faces against an arbitrary constant.
+    #
+    # Still configurable, so an absolute floor can be restored on a running
+    # deployment if a labelled set ever justifies one.
+    min_confidence: float = field(default_factory=lambda: _min_item_confidence())
     # Trimming needs enough items to be meaningful; below this we only weight.
     min_items_for_trim: int = 5
     # Fewer usable items than this => refuse to score (undetermined) rather than

@@ -21,10 +21,19 @@ def test_never_a_plain_mean_outliers_are_trimmed():
 
 
 def test_low_confidence_items_are_dropped_not_averaged_in():
+    """The floor MECHANISM, exercised explicitly.
+
+    The default is now 0.0 -- no absolute floor -- because `_haar_confidence` is
+    an unbounded cascade reject level over 10 and real photographs produce 0.044
+    to 1.000 with no gap near any particular constant. See
+    AggregationParams.min_confidence. The mechanism still has to work for anyone
+    who sets DF_MIN_ITEM_CONFIDENCE, so the threshold is stated here rather than
+    inherited from a default that is deliberately inert.
+    """
     good = [ScoredItem(index=i, score=10.0, confidence=0.9) for i in range(5)]
     garbage = [ScoredItem(index=i + 5, score=95.0, confidence=0.05) for i in range(5)]
 
-    result = aggregate(good + garbage)
+    result = aggregate(good + garbage, AggregationParams(min_confidence=0.30))
 
     assert result.items_dropped_low_confidence == 5
     assert result.score < 20
@@ -81,7 +90,11 @@ def test_method_and_params_are_reported_for_the_audit_trail():
 
     assert result.method == "weighted_trimmed_mean.v1"
     assert result.params["trim_frac"] == 0.10
-    assert result.params["min_confidence"] == 0.30
+    # 0.0 = no absolute floor. The KEY must still be reported whatever the
+    # value: the audit row records the parameters a score was computed under,
+    # and "min_confidence was 0.0" is a fact a dispute needs, not an omission.
+    assert result.params["min_confidence"] == 0.0
+    assert "min_confidence" in result.params
 
 
 def test_image_identity_aggregation_still_records_a_method():
@@ -93,6 +106,25 @@ def test_image_identity_aggregation_still_records_a_method():
 
 
 def test_image_identity_below_confidence_is_undetermined():
-    result = aggregate_identity(ScoredItem(index=0, score=95.0, confidence=0.1))
+    """Same: the single-item path still refuses when a floor is configured."""
+    result = aggregate_identity(
+        ScoredItem(index=0, score=95.0, confidence=0.1),
+        AggregationParams(min_confidence=0.30),
+    )
 
     assert result.score is None
+
+
+def test_no_absolute_floor_by_default():
+    """The change itself. A weakly-detected REAL face must produce a verdict.
+
+    `measured: yes` 2026-09-01: the 0.30 default discarded six of thirty
+    images -- including tesla.jpg, an ordinary portrait whose two detections
+    landed at 0.290 -- turning a scored result into `undetermined`. The relative
+    detection gate remains the mechanism for "is this a face"; this floor was
+    rejecting faint detections of real faces against an arbitrary constant.
+    """
+    result = aggregate_identity(ScoredItem(index=0, score=56.7, confidence=0.171))
+
+    assert result.score is not None
+    assert AggregationParams().min_confidence == 0.0

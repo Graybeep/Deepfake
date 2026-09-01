@@ -100,7 +100,11 @@ def test_coverage_is_reported_at_every_k_including_one():
     # score alone would look identical to one computed off all ten.
     thin = aggregate(
         _items(4, confidence=0.9) + _items(6, confidence=0.1),
-        AggregationParams.for_media("video"),
+        # min_confidence stated, not inherited. The default is now 0.0 (no
+        # absolute floor -- see AggregationParams.min_confidence), so these
+        # tests have to configure the floor they are demonstrating coverage
+        # against, or nothing gets dropped and coverage is trivially 1.0.
+        AggregationParams.for_media("video", min_confidence=0.30),
     )
     assert thin.score is not None
     assert thin.items_total == 10
@@ -124,7 +128,11 @@ def test_coverage_distinguishes_a_thin_verdict_from_a_complete_one():
     complete = aggregate(_items(4), AggregationParams.for_media("video"))
     thin = aggregate(
         _items(4, confidence=0.9) + _items(6, confidence=0.1),
-        AggregationParams.for_media("video"),
+        # min_confidence stated, not inherited. The default is now 0.0 (no
+        # absolute floor -- see AggregationParams.min_confidence), so these
+        # tests have to configure the floor they are demonstrating coverage
+        # against, or nothing gets dropped and coverage is trivially 1.0.
+        AggregationParams.for_media("video", min_confidence=0.30),
     )
 
     assert complete.coverage == 1.0

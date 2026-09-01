@@ -550,6 +550,34 @@ than a citation:
   geometry green — while the fully-covered positive control passed under that
   mutation, which is exactly why a thin-coverage case has to sit beside it.
 
+- **`min_confidence` IS NOW 0.0 -- the absolute floor is gone.** Changed
+  2026-09-01, and the argument is one this file already made: it is the same
+  reasoning that replaced an absolute 0.3 DETECTION floor with a relative ratio.
+  `_haar_confidence` is an unbounded cascade reject level over 10, so no
+  absolute constant on it is more justified than another.
+  The bullet below (kept, because it is the history) says this floor had never
+  fired -- 378 rows, lowest confidence 0.6, every one of them from the STUB
+  extractor which emits 0.6/0.7/0.8 by construction. Real Haar on real
+  photographs produces **0.044 to 1.000 with no gap near 0.3**, so the moment
+  detection improved the floor started firing, and what it destroyed was correct
+  results.
+  `measured: yes` 2026-09-01: a detection fallback for glasses and bad lighting
+  raised hard-case detection from 20/30 to 24/30, and this floor then discarded
+  six of them into `undetermined` -- glasses_gandhi 0.171, lowlight_douglass
+  0.044, lowlight_twain 0.098, shadow_twain 0.252, shadow_douglass 0.300, and
+  **tesla.jpg at 0.290, an ordinary portrait with no hard lighting at all**.
+  That last one is what settles it: the constant was refusing verdicts on
+  normal photographs.
+  The RELATIVE gate still runs and is unchanged -- that is the mechanism for "is
+  this a face", and it cannot empty a non-empty set. The absolute floor was
+  doing something different and unjustifiable: rejecting faint detections of
+  REAL faces. Still configurable via `DF_MIN_ITEM_CONFIDENCE` so a floor can be
+  restored if a labelled set ever justifies one, and the drop mechanism and the
+  reported parameter both remain (a mutation removing either is RED).
+  Known consequence, accepted: a weakly-detected face now sets the verdict
+  through worst-case rollup, and this detector already false-positives on grainy
+  images. The confidence is surfaced per face so a reader can see 0.17 next to
+  the score.
 - **`min_confidence=0.3` and `trim_frac=0.1` have never affected a single result.**
   `measured: yes` that they are inert, `measured: no` that the values are right. Across
   378 item rows the lowest confidence ever produced is 0.6, so nothing has ever been
