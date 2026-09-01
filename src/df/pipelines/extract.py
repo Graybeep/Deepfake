@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Iterable, Iterator, Protocol
 
 from df.config import settings
 
@@ -47,7 +47,15 @@ class AudioChunk:
 
 
 class FrameSampler(Protocol):
-    def sample(self, video_bytes: bytes) -> list[Frame]: ...
+    # Iterable, NOT list. The real sampler yields one frame at a time so peak
+    # memory does not scale with clip length -- see OpenCVFrameSampler. A list
+    # still satisfies this, so the stub is unchanged.
+    #
+    # CALLER CONTRACT: you cannot ask an Iterable whether it is empty without
+    # consuming it. `bool(sample(...))` is always True for a generator, and the
+    # one caller relied on exactly that to decide whether the video was
+    # decodable. Count what you consume instead.
+    def sample(self, video_bytes: bytes) -> Iterable[Frame]: ...
 
 
 class FaceExtractor(Protocol):
@@ -288,12 +296,33 @@ class OpenCVFrameSampler:
     otherwise turn one upload into six figures of GPU inferences.
     """
 
-    def sample(self, video_bytes: bytes) -> list[Frame]:
+    def sample(self, video_bytes: bytes) -> Iterator[Frame]:
+        """Yields frames one at a time. Deliberately a generator.
+
+        It used to build the whole list before returning it, and every entry is
+        a PNG-encoded FULL FRAME -- 3.4 MB each at 1080p (`measured: yes`). So
+        peak memory scaled with resolution AND length before a single frame was
+        scored, next to a resident 66M-parameter model.
+
+        What that cost, `measured: yes` 2026-09-01 on the deployed service: 40
+        frames at 720p killed the inference worker with SIGKILL, and the SAME 20s
+        clip at an 8-frame cap gave 201s-never-finished / 53s-crashed-recovered /
+        4.2s-clean across three consecutive runs. Identical input, three
+        outcomes, because the binding constraint was the container's remaining
+        memory rather than anything about the clip.
+
+        Streaming makes one decoded frame plus one crop the working set, so cost
+        stops scaling with length. `video_max_frames` still bounds total work.
+
+        The temp file is cleaned in `finally`, which for a generator runs when it
+        is exhausted OR closed -- so an abandoned iteration still cleans up, and
+        GeneratorExit is not swallowed.
+        """
+        import os
         import tempfile
 
         import cv2
 
-        frames: list[Frame] = []
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
             tmp.write(video_bytes)
             tmp_path = tmp.name
@@ -310,17 +339,14 @@ class OpenCVFrameSampler:
                 if i % step == 0:
                     ok_enc, buf = cv2.imencode(".png", frame)
                     if ok_enc:
-                        frames.append(
-                            Frame(index=out_i, data=buf.tobytes(), timestamp_s=i / src_fps)
+                        yield Frame(
+                            index=out_i, data=buf.tobytes(), timestamp_s=i / src_fps
                         )
                         out_i += 1
                 i += 1
         finally:
             cap.release()
-            import os
-
             os.unlink(tmp_path)
-        return frames
 
 
 class OpenCVFaceExtractor:

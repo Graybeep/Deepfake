@@ -1009,6 +1009,79 @@ ANALYZER_MUTATIONS = [
     ),
 ]
 
+VIDEO_STREAM_WITNESS = r"""
+import inspect, os
+os.environ["DF_VIDEO_FPS_SAMPLE"] = "30"
+os.environ["DF_VIDEO_MAX_FRAMES"] = "4"
+from df.pipelines.extract import Frame, OpenCVFrameSampler
+from df.workers import cpu_preprocess
+from df.storage import InMemoryStorage
+from df.queue import TOPIC_PREPROCESS, InMemoryQueue
+import sys; sys.path.insert(0, "tests")
+from tests.fakes import FakeDb, FakeJobStatus
+
+print("sample is a generator ->", inspect.isgeneratorfunction(OpenCVFrameSampler.sample))
+
+
+class Fixed:
+    def __init__(self, n): self.n = n
+    def sample(self, b):
+        for i in range(self.n):
+            yield Frame(index=i, data=b"x", timestamp_s=float(i))
+
+
+def decodable_for(n):
+    cpu_preprocess.build_frame_sampler = lambda: Fixed(n)
+    cpu_preprocess.build_face_extractor = lambda: type("E", (), {"extract": lambda s, b, frame_index=0: []})()
+    db, st = FakeDb(), InMemoryStorage()
+    q, stat = InMemoryQueue(), FakeJobStatus()
+    db.add_job("j", "video")
+    st.put_bytes("raw/j/original", b"v")
+    q.push(TOPIC_PREPROCESS, {"job_id": "j", "media_type": "video"})
+    cpu_preprocess.handle(q.pop(TOPIC_PREPROCESS), db=db, storage=st, queue=q, status=stat)
+    ev = [d for jj, e, d in db.events if e == "preprocess.complete"]
+    return ev[-1].get("decodable") if ev else None
+
+
+print("zero frames -> decodable ->", decodable_for(0))
+print("four frames -> decodable ->", decodable_for(4))
+"""
+
+VIDEO_STREAM_MUTATIONS = [
+    Mutation(
+        # The trap, exactly as it would be written by someone converting the
+        # sampler and not noticing this line. A generator is always truthy, so
+        # an unreadable video reports decodable and the user is told "no face
+        # found" about a file that was never read.
+        label="sampled_any back to bool(iterable) (unreadable video reads as decodable)",
+        file="src/df/workers/cpu_preprocess.py",
+        old="        sampled_any = frames_seen > 0",
+        new="        sampled_any = bool(sampler.sample(raw))",
+        witness=VIDEO_STREAM_WITNESS,
+        test="tests/test_video_streaming.py",
+    ),
+    Mutation(
+        # The opposite direction: never decodable. Only the positive control
+        # catches this, which is why it is in the file.
+        label="sampled_any always False (every video reads as unreadable)",
+        file="src/df/workers/cpu_preprocess.py",
+        old="        sampled_any = frames_seen > 0",
+        new="        sampled_any = False",
+        witness=VIDEO_STREAM_WITNESS,
+        test="tests/test_video_streaming.py",
+    ),
+    Mutation(
+        # Back to materialising every frame -- the OOM. Detected by the
+        # generator check and by the one-encode-per-frame check.
+        label="sampler returns a list again (the OOM)",
+        file="src/df/pipelines/extract.py",
+        old="                        yield Frame(",
+        new="                        _unused = Frame(",
+        witness=VIDEO_STREAM_WITNESS,
+        test="tests/test_video_streaming.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1257,6 +1330,10 @@ if __name__ == "__main__":
     print("\nanalyzer result display (plain language, caveats kept)")
     an_bad = run_all(ANALYZER_MUTATIONS)
     print(f"  {len(ANALYZER_MUTATIONS)} mutation(s), {an_bad} did not produce RED")
+
+    print("\nvideo frame streaming (the OOM and the decodability trap)")
+    vs_bad = run_all(VIDEO_STREAM_MUTATIONS)
+    print(f"  {len(VIDEO_STREAM_MUTATIONS)} mutation(s), {vs_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

@@ -136,9 +136,19 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
     if media_type == "video":
         sampler = build_frame_sampler()
         extractor = build_face_extractor()
-        frames = sampler.sample(raw)
-        sampled_any = bool(frames)
-        for frame in frames:
+        # COUNT what the sampler yields; do NOT test the iterable's truthiness.
+        #
+        # This was `sampled_any = bool(frames)` when sample() returned a list.
+        # The sampler now streams, and a generator is ALWAYS truthy -- so that
+        # line would have reported every video as decodable, including one that
+        # produced no frames at all. `sampled_any` feeds `decodable` below,
+        # which is what raises MEDIA NOT DECODED, so the failure would have been
+        # to tell someone "no face found" about a file that was never read.
+        # CLAUDE.md records that exact confusion as fixed on 2026-08-31; a
+        # one-word change here would have brought it back silently.
+        frames_seen = 0
+        for frame in sampler.sample(raw):
+            frames_seen += 1
             for crop in _gate_detections(
                 extractor.extract(frame.data, frame_index=frame.index),
                 discarded, frame_index=frame.index,
@@ -154,6 +164,7 @@ def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, 
                     # was. See migration 006.
                     **_face_size(crop),
                 })
+        sampled_any = frames_seen > 0
 
     elif media_type == "image":
         extractor = build_face_extractor()
