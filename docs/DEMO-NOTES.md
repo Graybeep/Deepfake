@@ -62,11 +62,16 @@ verdict."*
 
 ## Suggested sequence
 
-1. **Clean portrait** — 0.54, `likely_authentic`. Point at the per-face table:
-   score, detection confidence, pixel size.
+1. **Clean portrait** — 0.54, `likely_authentic`. Read the headline and the
+   scale: "no signs" at 0 and "strong signs" at 100, with the score pinned. The
+   per-face table is deliberately absent here — with one face it only restated
+   the headline. Open **Technical details** to show the three advisories, the
+   trust level and the weights hash sitting behind the plain answer.
 2. **Screenshot** — 69.53, `leaning_manipulated`. Name the limitation first.
 3. **Spliced face** — 62.08. The manipulation case.
-4. **Group photo** — 6 faces, one verdict via worst-case rollup, 5.5 s.
+4. **Group photo** — 6 faces, one verdict via worst-case rollup, 5.5 s. This
+   is where the per-face table appears, and where a skipped detection reads as
+   "skipped — 31% as strong" rather than a raw confidence number.
 5. `/healthz` — worker liveness, if anyone asks how you know it is up.
 
 ## Things that are true and worth saying
@@ -104,46 +109,43 @@ rotating edge; two hops reaches the client. `GET /v1/whoami` shows the resolved
 identity and the headers behind it, which is how this was determined rather than
 guessed — the first guess was wrong and failed silently.
 
-## Audio: say it first, before anyone finds it
+## If asked about audio or video
 
-**The line, early, unprompted:**
+Neither is offered in the UI. The file input says "Photos only" and the landing
+page describes two pipelines, not three. That is deliberate and recent -- both
+were advertised until 2026-09-01.
 
-> "Image and video run the real DFDC-winner weights. Audio has the full
-> pipeline — chunking, aggregation, routing, retention — and a stub scorer,
-> because that checkpoint is a face model and pointing it at spectrograms would
-> produce confident numbers from something that has never seen audio."
+**Audio**, if asked: "The audio pipeline is built end to end -- chunking,
+spectrograms, aggregation, routing, retention -- but the scorer is a stub, so
+it's not in the product. The checkpoint we use is a face model, and pointing it
+at spectrograms would produce confident numbers from something that has never
+seen audio."
 
-Said first, that reads as engineering discipline. Found by a judge, it reads as
-a hidden hole. Same information, opposite impression, and the only cost is who
-says it first.
+That is verifiable if anyone wants it: `measured: yes`, a 21 s WAV through the
+API gave 7 log-mel spectrogram chunks, all 7 scored, coverage 1.0, `uncertain`
+at 40.2638, media deleted. Every stage real, only the scorer a SHA-256 of the
+bytes -- and the advisory says exactly that.
 
-**A judge cannot reach it by clicking.** `measured: yes` 2026-09-01 against the
-deployed `/app`:
+**Video**, if asked: "It works through the API for short clips. It's not in the
+UI because the frame sampler holds every sampled frame in memory at once, so a
+phone-resolution clip either blows our request timeout or takes the container
+down. Fixing that properly means streaming frames, and I'd rather ship the
+honest limit than a feature that falls over in front of you."
 
-- the file input is `accept="image/*"`, so the picker filters to images;
-- the client sends `media_type: 'image'` **hardcoded** — it is the only value
-  the UI can produce, so an audio job cannot be created from the page at all;
-- forcing a WAV through the picker anyway lands in the *image* pipeline, which
-  returns `undetermined`, `aggregate_score: None`, `model_version_id: None` and
-  `MEDIA NOT DECODED: ... detected as 'webp-or-wav' ... so no faces were
-  examined`. No number is invented.
+`measured: yes` on the deployed service:
 
-So no config change and no redeploy were needed to close this. Reaching a stub
-audio score requires calling `POST /v1/jobs` directly with
-`media_type: "audio"`.
+| clip | outcome |
+|---|---|
+| 4 s @ 720p, 8 frames | works — all 8 scored, coverage 1.0, `likely_authentic`, 15.4 s |
+| 20 s @ 720p, 40 frames | `gpu-inference exited with -9` — container killed |
+| 10 s @ 1080p, capped to 12 frames | 107 s (UI gives up at 90 s), container down and back twice |
 
-**What the audio pipeline actually does**, if asked. `measured: yes` on the
-deployed service with a 21 s WAV: 7 log-mel spectrogram chunks, all 7 scored,
-`coverage 1.0`, routed to `uncertain` at 40.2638, media deleted. Every stage is
-real; only the scorer is not. That 40.26 is a SHA-256 of the input bytes mapped
-onto 0–100 — deterministic, stable for the same file, uncorrelated with
-manipulation. The advisory says so: *"PLACEHOLDER MODEL: this score was produced
-by a stub scorer, not a trained detector. It carries no detection meaning."*
+One 1080p frame is 3.4 MB PNG-encoded; twelve is 41 MB, beside a resident B7.
+`DF_VIDEO_MAX_FRAMES` is pinned at 12 so a direct API call does less damage.
 
-**If audio comes up as a limitation, the floor is the good answer.** A 6 s file
-produces 2 chunks against a 3-chunk minimum for audio, so it returns
-`undetermined` rather than scoring on thin evidence — the same rule as the
-detection gate: refuse rather than guess.
+**Both answers are stronger than the feature would have been.** Naming a limit
+with numbers behind it reads as knowing your own system; a video button that
+kills the service mid-demo does not.
 
 ## Known, not a problem tomorrow: slow jobs get delivered twice
 

@@ -18,9 +18,24 @@ public.**
 | `DF_FACE_WEIGHTS` | `/models/weights/dfdc_b7_ns_seed111.pth` | Baked into the image |
 | `PORT` | injected by the platform | The launcher reads it; do not hardcode 8000 |
 | `DF_TRUSTED_PROXY_HOPS` | `2` on Railway | Proxies between client and app. **Determine it, do not guess** — see below |
+| `DF_DETECT_MAX_SIDE` | `1600` | Longest side Haar detects on. Crops stay native. 0 disables |
+| `DF_VIDEO_MAX_FRAMES` | `12` | Frames sampled per video. The sampler holds them all at once |
+| `DF_QUEUE_RECLAIM_MS` | `45000` | Must stay BELOW the UI's 90 s deadline, or an orphaned job recovers after the page has already given up |
 
 `DF_AUDIO_WEIGHTS` stays unset — audio has no checkpoint and falls back to the
 stub, which is the documented mixed state and fails closed.
+
+## Deploys are manual
+
+`git push` does NOT deploy. The Railway service has no GitHub source
+(`railway status --json` reports `source.repo = null`), so a build happens only
+when someone runs:
+
+    railway up --detach
+
+That is worth knowing in both directions: committing during a demo is safe, and
+a fix is not live merely because it is pushed. Setting an environment variable
+DOES restart the container -- faster than a build, but still a restart.
 
 ## Determining `DF_TRUSTED_PROXY_HOPS`
 
