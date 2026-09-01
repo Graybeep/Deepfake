@@ -48,7 +48,7 @@ def _int(name: str, default: int) -> int:
 # photo runs 10 sequential batches instead of one enormous one. On 2 cores the
 # throughput cost is near zero, because a larger batch was not buying
 # parallelism there anyway.
-BATCH_SIZE = _int("DF_INFERENCE_BATCH_SIZE", 2)
+BATCH_SIZE = _int("DF_INFERENCE_BATCH_SIZE", 1)
 
 
 def handle(msg: Message, *, db: Db, storage: storage_mod.Storage, queue: Queue, status: JobStatus) -> None:

@@ -54,6 +54,41 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   worker runs the stub and no test covered the branch), and even when it worked
   it destroyed the aspect ratio *before* the careful resize, making that step a
   no-op. Two resizes, and the wrong one won.
+- **Many-face photos crashed the IMAGE path, and that mattered more than
+  video.** `measured: yes` 2026-09-01: a 24-face group photograph took the
+  deployed container down three times and returned nothing after 196s, while a
+  6-face photo completes in 5.5s. Nine of 41 evaluation runs returned 502 while
+  the container restarted around it. Each face is its own B7 forward at 380x380.
+  Fixed by two bounds, both measured rather than chosen: `DF_MAX_FACES_SCORED`
+  (5) and `DF_INFERENCE_BATCH_SIZE` (1). Batch 2 gave 1/3 clean, batch 1 gave
+  2/3, and batch 1 plus the cap gives **3/3 at 4.3s**. Single-face uploads were
+  never affected: 5/5 clean throughout.
+  **Capped is recorded APART from gated**, and that separation is the whole
+  reason the cap is acceptable. A gated detection was judged not to be a face; a
+  capped one was never examined. `faces_capped`, `max_faces_scored` and
+  `capped_faces` sit beside the discarded fields, and absent stays None rather
+  than becoming 0. Reporting them as one number would repeat the "could not
+  decode" / "no face found" confusion this project already had to fix. A
+  manipulated face below the cut is not examined -- a real loss, in the response
+  rather than hidden.
+  **The failure was always the FIRST job after a restart.** Once warm, the same
+  input runs clean repeatedly. That is why the demo habit is to upload one photo
+  before presenting, and it is now a measured reason rather than a superstition.
+- **The detector has been characterised on a set, and it is not flattering.**
+  `scripts/evaluate.py` -> `docs/EVALUATION.md`, 41 runs over public-domain
+  photographs and controlled variants. It cannot compute accuracy -- there are
+  no labelled deepfakes -- and says so. What it measured:
+  an 1879 photograph of Frederick Douglass scores **73.4 -> leaning_manipulated**
+  and **90.6 -> likely_manipulated at jpeg q40**; the Solvay 1927 group photo
+  scores 91.7. Confident false positives on known-authentic images, and the
+  pattern is old/grainy photographs. Compression pushes scores up monotonically
+  on the same source (73.4 -> 75.7 -> 90.6), which upgrades the "screenshots
+  score like manipulations" claim from one sample to a gradient. Susan B.
+  Anthony returns undetermined on 4 of 5 variants -- Haar finds no face in the
+  original and finds one only after q70 recompression, so whether a face exists
+  is itself unstable under re-encoding. Curie, Einstein and Twain sit at 0.6-2.6
+  across every variant, so the detector is not uniformly wrong.
+  Do not present this model as working well on historical or grainy images.
 - **The container has 1000 MB, `measured: yes` 2026-09-01**, read from the
   cgroup at boot and logged by `deploy.py` beside the CPU quota. Railway does
   not report it (`limitOverride` is None, i.e. plan default, and the default is

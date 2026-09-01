@@ -317,7 +317,7 @@ class Settings:
     # uses. This does mean a manipulated face outside the top N is not examined,
     # which is a real loss and is why the count is surfaced rather than hidden.
     max_faces_scored: int = field(
-        default_factory=lambda: _int("DF_MAX_FACES_SCORED", 8)
+        default_factory=lambda: _int("DF_MAX_FACES_SCORED", 5)
     )
     audio_chunk_seconds: float = field(
         default_factory=lambda: _float("DF_AUDIO_CHUNK_SECONDS", 3.0)

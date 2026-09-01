@@ -220,6 +220,30 @@ structurally unable to reach the person watching — a job that did complete cam
 back 30 s after the page had already said "timed out". Both are env vars, so
 either can be retuned on the running deployment without a rebuild.
 
+## Many-face photos, and the one habit that matters
+
+`measured: yes` 2026-09-01. A 24-face group photograph (Solvay 1927) used to
+take the container down three times and return nothing after 196 s. Now:
+**3/3 clean at 4.3 s**, reporting `scored=5, capped=16, discarded=3`.
+
+Three changes got there, and the third is free:
+
+| lever | many-face photo |
+|---|---|
+| nothing (before) | never completed, container down 3x |
+| `DF_MAX_FACES_SCORED=5` + `DF_INFERENCE_BATCH_SIZE=1` | 3/3 clean, 4.3 s |
+| **warm it before you present** | the first job after any restart is the one at risk |
+
+That last row is the habit. Across every test tonight the failure was the FIRST
+job after a container restart; once warm, the same input runs clean repeatedly.
+Upload one photo before anyone is watching.
+
+**What "capped" means if it comes up:** the response separates three counts —
+faces *scored*, faces *capped* (skipped to bound cost, never examined), and
+detections *discarded* (judged not to be faces by the confidence gate). A capped
+face could in principle be the manipulated one, which is why the count is in the
+response instead of being quietly dropped.
+
 ## Do not
 
 - **Do not redeploy from here on.** A container restart puts a rollout between a
