@@ -105,6 +105,7 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
 .badge.warn{border-color:rgba(249,115,22,.5);color:var(--primary);background:rgba(249,115,22,.1)}
 .badge.stub{border-color:rgba(239,68,68,.45);color:#FCA5A5;background:rgba(239,68,68,.1)}
 .badge.ok{border-color:rgba(34,197,94,.45);color:var(--accent);background:rgba(34,197,94,.1)}
+.badge.api{border-color:rgba(203,213,225,.35);color:var(--muted-fg);background:rgba(203,213,225,.07)}
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);
   padding:var(--space-3)}
@@ -175,14 +176,21 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
 @media(min-width:760px){.stats{grid-template-columns:repeat(4,1fr)}}
 
 /* ── section heads ────────────────────────────────────────────────────── */
-.head{max-width:64ch;margin-bottom:var(--space-5)}
-.head h2{font-size:clamp(36px,7vw,60px);margin-bottom:var(--space-2)}
+/* 64ch is sized for the paragraph, and it was strangling the heading: at 60px
+   condensed, "ONE HONEST VERDICT OUT." needs ~700px and was wrapping "OUT."
+   onto a line of its own. The lede sets its own 62ch, so the block does not
+   need a shared cap -- the heading gets room and the prose stays readable. */
+.head{max-width:920px;margin-bottom:var(--space-5)}
+.head h2{font-size:clamp(36px,7vw,60px);margin-bottom:var(--space-2);
+  /* Stops a single short word orphaning onto its own line -- "ONE HONEST
+     VERDICT / OUT." reads as a mistake. Progressive: browsers without it wrap
+     as before, nothing is lost. */
+  text-wrap:balance}
 .head h2 em{font-style:normal;color:var(--primary)}
 
 /* ── pipeline cards ───────────────────────────────────────────────────── */
-.grid-3{display:grid;gap:var(--space-3);grid-template-columns:1fr}
-@media(min-width:720px){.grid-3{grid-template-columns:repeat(2,1fr)}}
-@media(min-width:1000px){.grid-3{grid-template-columns:repeat(2,1fr)}}
+.grid-2up{display:grid;gap:var(--space-3);grid-template-columns:1fr}
+@media(min-width:760px){.grid-2up{grid-template-columns:repeat(2,1fr)}}
 
 .pipe{display:flex;flex-direction:column;gap:var(--space-2);
   transition:transform var(--t-mid) var(--ease-back),border-color var(--t-mid)}
@@ -383,13 +391,27 @@ footer a:hover{color:var(--primary)}
   <div class="wrap">
     <div class="head reveal">
       <p class="eyebrow">The circuits</p>
-      <h2>Two routes in.<br><em>One honest verdict out.</em></h2>
-      <p class="lede">Each pipeline runs its own preprocessing and converges on shared
-        aggregation, band routing and retention. Same audit row, same caveats, same rules.</p>
+      <h2>However it comes in.<br><em>One honest verdict out.</em></h2>
+      <p class="lede">Each path runs its own preprocessing and converges on the same
+        aggregation, band routing and retention — same audit row, same caveats, same
+        rules. Photos run in the app; video runs through the API on short clips.</p>
     </div>
 
-    <div class="grid-3">
+    <div class="grid-2up">
       <article class="card pipe reveal">
+        <div class="pipe-top">
+          <span class="pipe-ico"><svg aria-hidden="true"><use href="#i-image"/></svg></span>
+          <div><h3>Image</h3><p class="n">5 stages</p></div>
+        </div>
+        <ul class="steps">
+          <li><i>01</i>Ingest</li><li><i>02</i>Face extract</li><li><i>03</i>Align</li>
+          <li><i>04</i>EfficientNet-B7</li><li><i>05</i>Route</li>
+        </ul>
+        <div class="pipe-foot"><span>1 image is a complete observation</span>
+          <span class="badge ok">Live in the app</span></div>
+      </article>
+
+      <article class="card pipe reveal" style="--d:60ms">
         <div class="pipe-top">
           <span class="pipe-ico"><svg aria-hidden="true"><use href="#i-video"/></svg></span>
           <div><h3>Video</h3><p class="n">7 stages</p></div>
@@ -399,19 +421,8 @@ footer a:hover{color:var(--primary)}
           <li><i>04</i>Align</li><li><i>05</i>EfficientNet-B7</li><li><i>06</i>Aggregate</li>
           <li><i>07</i>Route</li>
         </ul>
-        <div class="pipe-foot"><span>Min 3 frames to score</span><span class="badge warn">Research checkpoint</span></div>
-      </article>
-
-      <article class="card pipe reveal" style="--d:60ms">
-        <div class="pipe-top">
-          <span class="pipe-ico"><svg aria-hidden="true"><use href="#i-image"/></svg></span>
-          <div><h3>Image</h3><p class="n">5 stages</p></div>
-        </div>
-        <ul class="steps">
-          <li><i>01</i>Ingest</li><li><i>02</i>Face extract</li><li><i>03</i>Align</li>
-          <li><i>04</i>EfficientNet-B7</li><li><i>05</i>Route</li>
-        </ul>
-        <div class="pipe-foot"><span>1 image is a complete observation</span><span class="badge warn">Research checkpoint</span></div>
+        <div class="pipe-foot"><span>Min 3 frames to score</span>
+          <span class="badge api">API only &middot; short clips</span></div>
       </article>
 
     </div>
