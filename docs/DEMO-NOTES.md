@@ -162,10 +162,46 @@ Tomorrow's margin is fine — the slowest measured demo case is the 6-face group
 photo at 5.5 s, far inside the timeout, and the face model is warmed at boot.
 Not worth a deploy tonight. Worth knowing it exists.
 
+## Full-resolution phone photos: fixed 2026-09-01, verified
+
+A 12.2 MP upload used to sit in `preprocessing` for 85+ seconds and then take
+the container down (`gpu-inference exited with -9`, SIGKILL), returning
+`undetermined`. Haar ran on the full-resolution image: +143.9 MB peak RSS for a
+single extract, next to a resident B7. That is what a phone camera produces, so
+it was the demo path.
+
+`DF_DETECT_MAX_SIDE=1600` now bounds the image Haar sees; crops still come from
+the full-resolution original. `measured: yes` on the deployed service after the
+fix:
+
+| upload | before | after |
+|---|---|---|
+| 12.2 MP | 85 s, container SIGKILLed, `undetermined` | 8.8 s, **container stayed up** |
+| 8.4 MP real photo | (never got a verdict) | `likely_authentic` 1.3357, 1 face 516x516 |
+| 1.2 MP baseline | 0.7898, 523x523 | 0.7898, 523x523 — **unchanged** |
+
+The small-image path is untouched, which is the check that matters for the score
+table above: it is below the cap, so the numbers in it still stand.
+
+The 8.4 MP run is worth showing if anyone asks about the confidence gate. Three
+detections, two dropped, each recorded with why:
+
+    516x516 conf 0.573  <- best in frame, scored
+    265x265 conf 0.179  relative_to_best 0.312  discarded (< 0.4)
+    135x135 conf 0.085  relative_to_best 0.149  discarded (< 0.4)
+
+`DF_QUEUE_RECLAIM_MS` was also lowered 120000 -> 45000. The UI gives up at 90 s
+and the queue could not reclaim an orphaned job until 120 s, so recovery was
+structurally unable to reach the person watching — a job that did complete came
+back 30 s after the page had already said "timed out". Both are env vars, so
+either can be retuned on the running deployment without a rebuild.
+
 ## Do not
 
-- **Do not redeploy.** A container restart puts a rollout between a judge and
-  their result, and strands any in-flight job at `status=inference`.
+- **Do not redeploy from here on.** A container restart puts a rollout between a
+  judge and their result, and strands any in-flight job at `status=inference`.
+  The deploy above was taken deliberately, before the demo, because the phone
+  path was broken; that reason is now spent.
 - Do not quote a score as a probability or a percentage.
 - Do not call it "production-validated" or "adversarially robust" — neither is
   built, and both are on the forbidden list in CLAUDE.md.
