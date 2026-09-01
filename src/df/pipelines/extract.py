@@ -18,11 +18,25 @@ from typing import Iterable, Iterator, Protocol
 from df.config import settings
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Frame:
     index: int
-    data: bytes           # encoded still (PNG/JPEG bytes)
+    # Encoded still (PNG/JPEG bytes) OR an already-decoded BGR array.
+    #
+    # The real sampler yields ARRAYS. It used to PNG-encode every frame and the
+    # extractor immediately decoded it again, in the same process: a lossless
+    # round trip whose only effect was cost. Per 1080p frame that was ~6.2 MB
+    # decoded + 3.4 MB encoded + 6.2 MB decoded again, plus two codec passes;
+    # now it is one 6.2 MB array and no codec work.
+    #
+    # `extract()` accepts either, so the stub sampler still emits real PNGs and
+    # every existing caller that passes encoded bytes is unaffected.
+    data: "bytes | object"
     timestamp_s: float
+
+    # eq=False: a numpy field would make the generated __eq__ return an array,
+    # and bool() of that raises. Nothing compares Frames, and this keeps it
+    # that way rather than leaving a landmine.
 
 
 @dataclass(frozen=True)
@@ -59,7 +73,11 @@ class FrameSampler(Protocol):
 
 
 class FaceExtractor(Protocol):
-    def extract(self, image_bytes: bytes, frame_index: int = 0) -> list[FaceCrop]: ...
+    # Accepts encoded bytes OR a decoded BGR array. The video path passes
+    # arrays to avoid an encode/decode round trip that exists only to satisfy a
+    # type; the image path passes the raw upload so decode_image still owns
+    # HEIC handling and the "could not decode" verdict.
+    def extract(self, image: "bytes | object", frame_index: int = 0) -> list[FaceCrop]: ...
 
 
 class AudioChunker(Protocol):
@@ -67,6 +85,23 @@ class AudioChunker(Protocol):
 
 
 # --- deterministic stubs ---------------------------------------------------
+
+
+def _is_array(image: object) -> bool:
+    """True for a decoded image array, without importing numpy at module scope.
+
+    extract.py keeps cv2/numpy inside functions so it can be imported in
+    environments that lack them; a module-level `import numpy` for an
+    isinstance check would undo that.
+    """
+    return hasattr(image, "shape") and hasattr(image, "dtype")
+
+
+def _hashable_bytes(image: object) -> bytes:
+    """Deterministic bytes for the stubs, which hash whatever they are given."""
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return bytes(image)
+    return image.tobytes()          # type: ignore[union-attr]
 
 
 def _det(data: bytes, salt: bytes, mod: int) -> int:
@@ -155,7 +190,8 @@ class StubFaceExtractor:
     def __init__(self, force_faces: int | None = None) -> None:
         self.force_faces = force_faces
 
-    def extract(self, image_bytes: bytes, frame_index: int = 0) -> list[FaceCrop]:
+    def extract(self, image: "bytes | object", frame_index: int = 0) -> list[FaceCrop]:
+        image_bytes = _hashable_bytes(image)
         n = self.force_faces if self.force_faces is not None else _det(image_bytes, b"nfaces", 3)
         return [
             FaceCrop(
@@ -337,12 +373,11 @@ class OpenCVFrameSampler:
                 if not ok:
                     break
                 if i % step == 0:
-                    ok_enc, buf = cv2.imencode(".png", frame)
-                    if ok_enc:
-                        yield Frame(
-                            index=out_i, data=buf.tobytes(), timestamp_s=i / src_fps
-                        )
-                        out_i += 1
+                    # The decoded array goes straight through. cap.read()
+                    # allocates a fresh array per call, so yielding it is safe
+                    # -- the consumer is not handed a buffer we then overwrite.
+                    yield Frame(index=out_i, data=frame, timestamp_s=i / src_fps)
+                    out_i += 1
                 i += 1
         finally:
             cap.release()
@@ -384,11 +419,15 @@ class OpenCVFaceExtractor:
     instead of guessed.
     """
 
-    def extract(self, image_bytes: bytes, frame_index: int = 0) -> list[FaceCrop]:
+    def extract(self, image: "bytes | object", frame_index: int = 0) -> list[FaceCrop]:
         import cv2
         import numpy as np
 
-        arr = decode_image(image_bytes)
+        # An already-decoded frame skips the decode entirely. The video path
+        # passes arrays; the image path still passes the raw upload bytes, and
+        # those must go through decode_image so HEIC and the undecodable case
+        # keep behaving as documented.
+        arr = image if _is_array(image) else decode_image(image)
         if arr is None:
             return []
 

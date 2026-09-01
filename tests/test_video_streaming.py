@@ -49,11 +49,13 @@ def test_sample_is_a_generator_not_a_list():
 
 
 def test_frames_arrive_one_at_a_time(tmp_path, monkeypatch):
-    """Consuming one frame must not have decoded the rest.
+    """Consuming one frame must not have read the rest.
 
-    Asserted by counting `cv2.imencode` calls: after pulling a single frame,
-    exactly one frame has been encoded. A list-returning sampler would have
-    encoded every frame before the first `next()` returned.
+    Counts VideoCapture.read() calls. The first version of this test counted
+    cv2.imencode calls instead, which was a fine proxy right up until the
+    encode was removed as the whole point of the next change -- then it
+    asserted 1 and got 0. Reading is the property that actually defines
+    streaming; encoding was incidental.
     """
     import cv2
 
@@ -65,7 +67,49 @@ def test_frames_arrive_one_at_a_time(tmp_path, monkeypatch):
     monkeypatch.setattr(ex, "settings", Settings())
 
     video = _make_video(tmp_path, frames=10)
+    reads = {"n": 0}
+    real = cv2.VideoCapture
 
+    class Counting:
+        def __init__(self, *a):
+            self._c = real(*a)
+
+        def read(self):
+            reads["n"] += 1
+            return self._c.read()
+
+        def __getattr__(self, name):
+            return getattr(self._c, name)
+
+    monkeypatch.setattr(cv2, "VideoCapture", Counting)
+
+    gen = ex.OpenCVFrameSampler().sample(video)
+    first = next(gen)
+
+    assert isinstance(first, Frame)
+    assert reads["n"] == 1, f"{reads['n']} frames read to produce the first"
+
+    gen.close()
+
+
+def test_frames_are_not_encoded_on_the_way_to_the_extractor(tmp_path, monkeypatch):
+    """The round trip this removed: the sampler PNG-encoded every frame and the
+    extractor immediately decoded it again, in the same process. Per 1080p frame
+    that was ~6.2 MB decoded + 3.4 MB encoded + 6.2 MB decoded, plus two codec
+    passes, to move an image between two functions.
+
+    Asserted as "zero encodes", not "fewer": any encode here is the bug back.
+    """
+    import cv2
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_VIDEO_MAX_FRAMES", "5")
+    monkeypatch.setenv("DF_VIDEO_FPS_SAMPLE", "30")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    video = _make_video(tmp_path, frames=5)
     encodes = {"n": 0}
     real = cv2.imencode
 
@@ -74,14 +118,30 @@ def test_frames_arrive_one_at_a_time(tmp_path, monkeypatch):
         return real(ext, img, *a, **k)
 
     monkeypatch.setattr(cv2, "imencode", counting)
+    frames = list(ex.OpenCVFrameSampler().sample(video))
 
-    gen = ex.OpenCVFrameSampler().sample(video)
-    first = next(gen)
+    assert len(frames) == 5
+    assert encodes["n"] == 0, f"{encodes['n']} frames were encoded"
+    assert ex._is_array(frames[0].data), "frame carries encoded bytes, not an array"
 
-    assert isinstance(first, Frame)
-    assert encodes["n"] == 1, f"{encodes['n']} frames encoded to produce the first"
 
-    gen.close()
+def test_the_extractor_accepts_a_decoded_frame_and_encoded_bytes(monkeypatch):
+    """Both callers must keep working: video passes arrays, the image path
+    still passes the raw upload so decode_image owns HEIC and the undecodable
+    verdict."""
+    import cv2
+    import numpy as np
+
+    from df.pipelines import extract as ex
+
+    rng = np.random.default_rng(0)
+    arr = rng.integers(0, 255, (200, 200, 3), dtype=np.uint8)
+    encoded = cv2.imencode(".png", arr)[1].tobytes()
+
+    # neither raises, and the undecodable case still returns [] rather than
+    # being mistaken for an array
+    assert ex.OpenCVFaceExtractor().extract(arr) ==            ex.OpenCVFaceExtractor().extract(encoded)
+    assert ex.OpenCVFaceExtractor().extract(b"not an image") == []
 
 
 def test_the_frame_cap_still_bounds_total_work(tmp_path, monkeypatch):

@@ -1045,6 +1045,44 @@ def decodable_for(n):
 
 print("zero frames -> decodable ->", decodable_for(0))
 print("four frames -> decodable ->", decodable_for(4))
+
+# The REAL sampler, so mutations to OpenCVFrameSampler are observable. The
+# stubbed sampler above cannot see them -- it replaces the thing under test.
+import tempfile, cv2, numpy as np
+rng = np.random.default_rng(1)
+with tempfile.TemporaryDirectory() as d:
+    path = d + "/clip.mp4"
+    w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (160, 120))
+    if w.isOpened():
+        for _ in range(12):
+            w.write(rng.integers(0, 255, (120, 160, 3), dtype=np.uint8))
+        w.release()
+        video = open(path, "rb").read()
+        encodes = [0]
+        real_enc = cv2.imencode
+        def counting(ext, img, *a, **k):
+            encodes[0] += 1
+            return real_enc(ext, img, *a, **k)
+        cv2.imencode = counting
+        reads = [0]
+        real_cap = cv2.VideoCapture
+        class Counting:
+            def __init__(self, *a): self._c = real_cap(*a)
+            def read(self):
+                reads[0] += 1
+                return self._c.read()
+            def __getattr__(self, n): return getattr(self._c, n)
+        cv2.VideoCapture = Counting
+        gen = OpenCVFrameSampler().sample(video)
+        first = next(gen)
+        reads_for_first = reads[0]
+        rest = list(gen)
+        cv2.imencode = real_enc
+        cv2.VideoCapture = real_cap
+        print("reads to yield frame 1 ->", reads_for_first)
+        print("encodes during sampling ->", encodes[0])
+        print("frame carries an array  ->", hasattr(first.data, "shape"))
+        print("frames yielded          ->", 1 + len(rest))
 """
 
 VIDEO_STREAM_MUTATIONS = [
@@ -1071,12 +1109,22 @@ VIDEO_STREAM_MUTATIONS = [
         test="tests/test_video_streaming.py",
     ),
     Mutation(
-        # Back to materialising every frame -- the OOM. Detected by the
-        # generator check and by the one-encode-per-frame check.
-        label="sampler returns a list again (the OOM)",
+        # Re-introduce the PNG round trip: encode each frame so the extractor
+        # has to decode it again, in the same process. 32% slower for nothing.
+        label="frames PNG-encoded again (the pointless round trip)",
         file="src/df/pipelines/extract.py",
-        old="                        yield Frame(",
-        new="                        _unused = Frame(",
+        old="                    yield Frame(index=out_i, data=frame, timestamp_s=i / src_fps)",
+        new='                    yield Frame(index=out_i, data=cv2.imencode(".png", frame)[1].tobytes(), timestamp_s=i / src_fps)',
+        witness=VIDEO_STREAM_WITNESS,
+        test="tests/test_video_streaming.py",
+    ),
+    Mutation(
+        # Stop streaming: drain the capture into a list first, then yield from
+        # it. Peak memory goes back to scaling with clip length.
+        label="frames materialised before yielding (no longer streaming)",
+        file="src/df/pipelines/extract.py",
+        old="        cap = cv2.VideoCapture(tmp_path)",
+        new="        cap = cv2.VideoCapture(tmp_path); _drain = [cap.read()[1] for _ in range(60)]; cap.release(); cap = cv2.VideoCapture(tmp_path)",
         witness=VIDEO_STREAM_WITNESS,
         test="tests/test_video_streaming.py",
     ),
