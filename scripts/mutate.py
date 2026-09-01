@@ -730,6 +730,10 @@ print("forbidden 'adversarially robust' ->", "adversarially robust" in low)
 print("caveat 'not a probability'       ->", "not a probability" in low)
 print("caveat 'not production-validated'->", "not production-validated" in low)
 print("percentages rendered as text     ->", re.findall(r">\s*(\d+(?:\.\d+)?%)\s*<", page))
+visible = re.sub(r"<[^>]+>", " ", re.sub(r"<!--.*?-->|<style\b.*?</style>|<script\b.*?</script>", " ", page, flags=re.S))
+print("commercial words in visible copy ->",
+      [w for w in ("pricing", "billing", "per month", "subscribe") if w in visible.lower()])
+print("price figures in visible copy    ->", re.findall(r"\$\s?\d+", visible))
 print("emoji codepoints                 ->",
       sum(1 for c in page if 0x1F300 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF))
 """
@@ -822,6 +826,17 @@ LANDING_MUTATIONS = [
         file="web/landing.html",
         old="  }, 2000);",
         new="  }, 86400000);",
+        witness=LANDING_COPY_WITNESS,
+        test="tests/test_landing_page.py",
+    ),
+    Mutation(
+        # A pricing CTA reappears. The landing pattern this page is built from
+        # puts subscription CTAs after the feature grid, so the template's own
+        # shape invites this back every time someone extends the page.
+        label="pricing CTA added to the copy",
+        file="web/landing.html",
+        old='<p class="eyebrow">Free to try, nothing to sign</p>',
+        new='<p class="eyebrow">Pricing from $9 per month</p>',
         witness=LANDING_COPY_WITNESS,
         test="tests/test_landing_page.py",
     ),

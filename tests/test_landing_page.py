@@ -44,7 +44,24 @@ def payload(response) -> dict:
 
 @pytest.fixture(scope="module")
 def page() -> str:
+    """The raw file. Use for structural checks (elements, attributes, CSS)."""
     return LANDING.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def copy(page: str) -> str:
+    """Only what a reader sees: comments, CSS and script stripped.
+
+    A copy assertion has to run against copy. Checking the raw file instead
+    fails on the page's own machinery -- the comment `<!-- FINAL CTA (no
+    billing, no plans, no pricing) -->` tripped the commerce checks below, and
+    a JS comment mentioning `<noscript>` defeated the fallback check further
+    up. Both times the substring was real and the claim was not.
+    """
+    text = re.sub(r"<!--.*?-->", " ", page, flags=re.S)
+    text = re.sub(r"<style.*?</style>", " ", text, flags=re.S)
+    text = re.sub(r"<script.*?</script>", " ", text, flags=re.S)
+    return re.sub(r"<[^>]+>", " ", text)
 
 
 # --- content negotiation ----------------------------------------------------
@@ -220,3 +237,22 @@ def test_the_copy_is_visible_without_working_javascript(page):
     m = re.search(r"failsafe = setTimeout\(.*?\}, (\d+)\);", page, re.S)
     assert m, "no failsafe timer found"
     assert int(m.group(1)) <= 5000, f"failsafe fires after {m.group(1)}ms"
+
+
+@pytest.mark.parametrize("commercial", [
+    "pricing", "subscription", "subscribe", "billing", "per month", "/month",
+    "free trial", "upgrade", "credit card", "cancel anytime",
+])
+def test_the_page_sells_nothing(copy, commercial):
+    """No billing surface, by request.
+
+    The landing pattern this page is built from puts subscription CTAs after the
+    feature grid, so the shape of the template invites them back in every time
+    someone extends the page. This fails the moment one reappears.
+    """
+    assert commercial.lower() not in copy.lower()
+
+
+def test_no_price_figure_appears(copy):
+    """Catches "$9", "$19/mo" and friends, which the word list above cannot."""
+    assert re.search(r"\$\s?\d", copy) is None

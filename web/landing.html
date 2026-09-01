@@ -250,6 +250,10 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
   background:linear-gradient(140deg,var(--primary),var(--secondary));color:var(--on-primary)}
 .model.is-stub .avatar{background:linear-gradient(140deg,#4B5563,#374151);color:var(--muted-fg)}
 .avatar svg{width:30px;height:30px}
+/* .model is a flex column, so a bare inline-flex badge stretches to the
+   card width and reads as a bar rather than a pill. Measured live: 484px
+   against 170px for the same badge inside .pipe-foot's flex row. */
+.model>.badge{align-self:flex-start}
 .model h3{font-size:25px}
 .model .role{font-size:13.5px;color:var(--muted-fg);margin-top:4px}
 .specs{list-style:none;margin:0;padding:0;display:grid;gap:8px}
@@ -369,7 +373,7 @@ footer a:hover{color:var(--primary)}
     <div class="stats reveal" style="--d:240ms">
       <div class="stat"><b data-count="3">3</b><span>Pipelines</span></div>
       <div class="stat"><b data-count="2.1" data-suffix="s">2.1s</b><span>Per image</span></div>
-      <div class="stat"><b data-count="333">333</b><span>Tests passing</span></div>
+      <div class="stat"><b data-count="344">344</b><span>Tests passing</span></div>
       <div class="stat"><b data-count="5">5</b><span>Score bands</span></div>
     </div>
   </div>
