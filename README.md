@@ -1,7 +1,8 @@
 # Deepfake detection service
 
 Three ingest pipelines (video, image, audio) converging on shared aggregation,
-score-band routing, and retention logic.
+score-band routing, and retention logic. **Only the image pipeline is offered as
+a product** — see the table below before reading further.
 
 **Read `CLAUDE.md` before changing anything touching deletion, retention, or
 claims about what is built.** `DECISIONS.md` records the judgement calls made
@@ -25,6 +26,121 @@ by recording the inputs to the decision rather than by locking a reduction.
 > scores start looking believable. That is no longer hypothetical — the id is
 > now `face-tf_efficientnet_b7_ns-9db77ab93188`, and the caveat correctly
 > escalated instead of vanishing.
+
+## What actually works
+
+| pipeline | in the product? | in the backend? | blocker |
+|---|---|---|---|
+| **Image** | **yes** — `/app`, phone-tested | complete | none; this is the working path |
+| **Video** | no | **complete and verified** | container memory, not code |
+| **Audio** | no | **complete except the scorer** | no audio checkpoint chosen |
+
+The UI accepts photographs only (`accept="image/*"`, and the client sends
+`media_type: 'image'` — it cannot request anything else). Video and audio are
+reachable through the API by posting `media_type: "video"` / `"audio"`, and both
+run end to end, but neither is fit to offer. What follows is what each needs.
+
+### Image — the working path
+
+Real DFDC-winner EfficientNet-B7, ~2–3 s end to end, verified on a phone over
+cellular. Detection retries on contrast-enhanced and alternate Haar cascades when
+the primary finds nothing, which took hard-case detection from 20/23 to 23/23
+(`measured: yes`, glasses and bad lighting — the two cases originally reported
+broken).
+
+Known limits, measured rather than assumed, in `docs/EVALUATION.md`: it produces
+**confident false positives on grainy and badly-lit photographs** (an authentic
+1879 portrait scores 73, and 90 after recompression), compression pushes scores
+up monotonically, and calibration is unfitted so no score is a probability.
+
+### Video — works, but not on 1000 MB
+
+`Ingest → Frame Sample → Face Extract → Align → EfficientNet-B7 → Aggregate →
+Router`. `measured: yes`: a 4 s 720p clip yields 8 sampled frames, all 8 scored,
+`coverage 1.0`, `likely_authentic` in 15.4 s.
+
+**Why it is not offered.** `measured: yes` on the deployed service, the same 20 s
+clip five times: `54.5 s CRASHED / 4.6 s clean / 4.1 s clean / 4.1 s clean /
+99.4 s CRASHED`. Identical input, different outcomes, because the binding
+constraint is the container's remaining memory. The container has **1000 MB**
+(read from the cgroup at boot and logged by `deploy.py`), shared by five
+processes one of which holds a 66 M-parameter model — and `cv2.VideoCapture.read()`
+alone, retaining nothing, peaks at **123 MB** on a 1080p file against 21 MB for
+twenty face extractions. The cost is inside OpenCV's decoder.
+
+**To implement it:**
+
+1. **Give the container more memory.** This is the actual fix and it is a hosting
+   setting, not a patch. Everything below is optimisation around a ceiling.
+2. Already done and insufficient: frames stream one at a time instead of being
+   materialised as a list (peak 205 → 147 MB), and they pass to the extractor as
+   decoded arrays instead of a PNG encode/decode round trip (32 % faster, no
+   memory change). Three OpenCV levers were tested and none help —
+   `CAP_PROP_BUFFERSIZE=1` changes nothing, frame-seeking is slightly worse.
+3. If more memory is impossible: shrink the resident model. int8 dynamic
+   quantisation takes B7 from ~266 MB to ~67 MB, but it perturbs **every score**,
+   so the demo table and `docs/EVALUATION.md` would both need regenerating and
+   the accuracy effect measuring. Not a free win.
+4. Then enable it in the UI: `accept="image/*,video/*"` and derive `media_type`
+   from the picked file's type instead of hardcoding `'image'`
+   (`web/index.html`). Two lines, and only worth doing after (1).
+5. Verify with **repeated** runs, not one. Runs 2–4 of the five above were all
+   clean; a single check would have reported success.
+
+`DF_VIDEO_MAX_FRAMES` (8) and `DF_DETECT_MAX_SIDE` (1600) bound the damage
+meanwhile.
+
+### Audio — the pipeline is real, the scorer is not
+
+`Ingest → Chunk → Spectrogram → Scorer → Aggregate → Router`. `measured: yes`: a
+21 s WAV yields 7 log-mel spectrogram chunks, all 7 scored, `coverage 1.0`,
+banded and the media deleted. librosa loads it, the chunks are real, the routing
+is real.
+
+**Why it is not offered.** The scorer is `_hash_score()` in
+`src/df/inference/stub.py` — a SHA-256 of the input bytes mapped onto 0–100.
+Deterministic, stable for the same file, and uncorrelated with whether the audio
+was manipulated. The single checkpoint this project uses is a **face** model;
+`get_audio_model()` therefore falls back to the stub and logs it, and
+`build_audio_detector()` raises `NotImplementedError` on purpose rather than
+guessing an architecture. The stub declares `validation=placeholder`, which
+produces the strongest caveat on every audio result — pointing a face model at
+spectrograms would have produced confident numbers from something that has never
+heard audio.
+
+**To implement it:**
+
+1. **Choose a checkpoint with checkable provenance and a usable licence.** This
+   is the real blocker and it is the same one that has calibration stalled: most
+   audio anti-spoofing weights are fine-tuned on ASVspoof, whose terms and
+   train/eval overlap both need reading. `DECISIONS.md` §5 has the method used
+   for the face weights; apply it rather than inventing one.
+2. **Decide the input representation first, because it decides the work.** The
+   pipeline currently hands the scorer **log-mel spectrogram PNGs**. A
+   spectrogram-CNN drops into that seam unchanged. The strong models — AASIST,
+   RawNet2, wav2vec2/XLSR fine-tunes — take **raw waveform**, which means
+   changing `AudioChunk`, `LibrosaAudioChunker`, the CPU worker's audio branch
+   and the queue payload together. Pick the family before writing anything.
+3. Implement `build_audio_detector()` in `src/df/inference/efficientnet.py` (or a
+   new module) and set `DF_AUDIO_WEIGHTS`. The registry already routes to it and
+   already fails closed if it is absent.
+4. **Fit its own calibration.** `CLAUDE.md` is explicit that face and audio do
+   not share a temperature curve. Until that is done the audio advisory must stay
+   at `UNCALIBRATED`.
+5. Then enable it in the UI, and expect a mixed advisory state — the API derives
+   the caveat per model, so video/image at `research-checkpoint` alongside audio
+   at whatever audio earns is already handled without special-casing.
+
+### Where the code is
+
+| | |
+|---|---|
+| sampling, extraction, chunking | `src/df/pipelines/extract.py` |
+| the model registry and fail-closed fallback | `src/df/inference/registry.py` |
+| the stub scorer (audio's current scorer) | `src/df/inference/stub.py` |
+| the unimplemented audio builder | `src/df/inference/efficientnet.py` |
+| per-modality branching | `src/df/workers/cpu_preprocess.py` |
+| aggregation, bands, routing | `src/df/aggregation.py`, `src/df/bands.py` |
 
 ---
 
@@ -353,6 +469,11 @@ tests/
 ```
 
 ## Not built — deliberately
+
+Video and audio are **not** in this list: both pipelines are built and verified,
+they are simply not offered as a product. See "What actually works" above for
+what each one needs.
+
 
 - **Adversarial-input pre-classifier.** Scores are manipulable. Documented, not
   hidden.
