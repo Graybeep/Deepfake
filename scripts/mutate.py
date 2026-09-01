@@ -632,6 +632,75 @@ EXTRACT_FACE_WITNESS = (
     "      [cv2.imdecode(np.frombuffer(c.data, np.uint8), cv2.IMREAD_COLOR).shape[:2] for c in cs])"
 )
 
+RATELIMIT_WITNESS = (
+    "import os; os.environ['DF_TRUSTED_PROXY_HOPS'] = '1';"
+    "import df.gateway.app as g;"
+    "from df.config import Settings; g.settings = Settings();"
+    "R = lambda peer, xff=None: type('R', (), {"
+    "    'client': type('C', (), {'host': peer})(),"
+    "    'headers': ({'x-forwarded-for': xff} if xff else {})})();"
+    # At one hop: same client via rotating proxies shares a key, two clients
+    # do not, a spoofed prefix is ignored, a malformed header falls back, and
+    # an ipv4-mapped address does not get a second bucket.
+    "print(g.identity_of(R('100.64.0.2', '198.51.100.22')),"
+    "      g.identity_of(R('100.64.0.19', '198.51.100.22')),"
+    "      g.identity_of(R('100.64.0.2', '203.0.113.77')),"
+    "      g.identity_of(R('100.64.0.2', 'evil, 198.51.100.22')),"
+    "      g.identity_of(R('203.0.113.9', 'not-an-ip')),"
+    "      g.identity_of(R('10.0.0.7', '::ffff:198.51.100.22')));"
+    # Then TWO hops with a one-entry header. The "fewer entries than hops"
+    # guard is unreachable at one hop -- an empty header returns earlier --
+    # so a witness probing only hops=1 reports NO-OP for a mutation of it,
+    # which is exactly what happened the first time. No try/except needed:
+    # without the guard this indexes past the list and the traceback is the
+    # observable difference.
+    "os.environ['DF_TRUSTED_PROXY_HOPS'] = '2'; g.settings = Settings();"
+    "print('two-hop short header ->', g.identity_of(R('203.0.113.9', '1.2.3.4')))"
+)
+
+RATELIMIT_MUTATIONS = [
+    Mutation(
+        # The shipped bug: key on the socket peer behind a rotating proxy
+        # pool, so nothing ever accumulates and limiting does not happen.
+        label="key on the socket peer again (rotating proxies defeat it)",
+        file="src/df/gateway/app.py",
+        old="    if hops <= 0:",
+        new="    if True:",
+        witness=RATELIMIT_WITNESS,
+        test="tests/test_rate_limit_identity.py",
+    ),
+    Mutation(
+        # The dangerous "fix": trust the LEFTMOST entry, letting any client
+        # choose its own bucket by sending a header.
+        label="leftmost XFF entry trusted (client picks its own bucket)",
+        file="src/df/gateway/app.py",
+        old="    candidate = parts[-hops]",
+        new="    candidate = parts[0]",
+        witness=RATELIMIT_WITNESS,
+        test="tests/test_rate_limit_identity.py",
+    ),
+    Mutation(
+        # Drop the unmapping: ::ffff:1.2.3.4 gets its own bucket, doubling
+        # an allowance for anyone who sends the mapped form.
+        label="ipv4-mapped address not unmapped (two buckets per client)",
+        file="src/df/gateway/app.py",
+        old='    mapped = getattr(addr, "ipv4_mapped", None)',
+        new="    mapped = None",
+        witness=RATELIMIT_WITNESS,
+        test="tests/test_rate_limit_identity.py",
+    ),
+    Mutation(
+        # Fail toward a shared constant instead of the peer: every caller
+        # lands in one bucket and the service 429s the world.
+        label="malformed header falls back to a shared constant",
+        file="src/df/gateway/app.py",
+        old="    if len(parts) < hops:",
+        new="    if False:",
+        witness=RATELIMIT_WITNESS,
+        test="tests/test_rate_limit_identity.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -860,6 +929,10 @@ if __name__ == "__main__":
     print("\nzero-item attribution")
     z_bad = run_all(ZERO_ITEM_MUTATIONS)
     print(f"  {len(ZERO_ITEM_MUTATIONS)} mutation(s), {z_bad} did not produce RED")
+
+    print("\nrate-limit identity")
+    rl_bad = run_all(RATELIMIT_MUTATIONS)
+    print(f"  {len(RATELIMIT_MUTATIONS)} mutation(s), {rl_bad} did not produce RED")
 
     print("\nmedia decoding")
     d_bad = run_all(DECODE_MUTATIONS)

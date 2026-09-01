@@ -106,6 +106,32 @@ class Settings:
     )
 
     # ingress rate limiting (Tier 1)
+    # How many proxies sit between a client and this process, and are therefore
+    # trusted to have appended a truthful entry to X-Forwarded-For.
+    #
+    # 0 (default) means trust nothing: key the limiter on the socket peer. That
+    # is correct on a bare host and safe everywhere -- worst case the limiting is
+    # coarse, never wrong in the client's favour.
+    #
+    # Behind a platform proxy the socket peer is the proxy, and `measured: yes`
+    # 2026-09-01 on Railway that is not even ONE stable address: the gateway saw
+    # 20+ distinct source IPs (100.64.0.2-.22) rotating across requests. So 45
+    # rapid requests spread over many near-fresh buckets and rate limiting did
+    # nothing at all. Not coarse -- absent.
+    #
+    # Why a hop COUNT rather than "just read X-Forwarded-For": the header is
+    # client-supplied and only its rightmost entries are trustworthy. Each proxy
+    # APPENDS the peer it received from, so the rightmost entry was written by
+    # the proxy nearest this process, the next one in by the proxy before it, and
+    # anything further left may have been invented by the client. Taking the
+    # leftmost -- the common shortcut -- lets any caller choose its own bucket by
+    # sending a header, which is strictly worse than no limiting because it looks
+    # like protection. With N trusted hops the real client is the Nth entry from
+    # the right.
+    trusted_proxy_hops: int = field(
+        default_factory=lambda: max(0, _int("DF_TRUSTED_PROXY_HOPS", 0))
+    )
+
     ratelimit_capacity: int = field(
         default_factory=lambda: _int("DF_RATELIMIT_CAPACITY", 30)
     )

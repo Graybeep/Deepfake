@@ -143,7 +143,19 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   never traverse the gateway — ingress rate limiting never sees them — so a
   `content-length-range` condition in the policy is the only place
   DF_MAX_UPLOAD_BYTES can be enforced at all.
-- Rate limiting on ingress. **Works in compose; effectively DISABLED behind a
+- Rate limiting on ingress. **FIXED 2026-09-01.** The limiter keys on the client
+  IP resolved through `DF_TRUSTED_PROXY_HOPS`: 0 (default) uses the socket peer,
+  N>0 takes the Nth entry from the RIGHT of `X-Forwarded-For`. Rightmost, because
+  each proxy appends the peer it received from — so only the rightmost entries
+  were written by infrastructure and anything further left may be client-supplied.
+  **Never take the leftmost**, the usual shortcut: it lets any caller choose its
+  own bucket by sending a header, which is worse than no limiting because it
+  looks like protection. Every failure path (header absent, unparseable, shorter
+  than the hop count) falls back to the socket peer, never to a shared constant —
+  this runs on every request, and collapsing callers into one bucket would 429
+  everyone. IPv4-mapped IPv6 is unmapped, or `::ffff:1.2.3.4` and `1.2.3.4` get
+  separate buckets and an allowance doubles.
+  The bug it replaced, for the record: **effectively DISABLED behind a
   platform proxy** (`measured: yes` 2026-09-01 on Railway: 45 rapid POSTs, 45x
   201, no 429). `identity_of()` keys on the socket peer, and its docstring
   already warned that behind a proxy this buckets to the proxy — the reality is

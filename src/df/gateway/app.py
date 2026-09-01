@@ -11,6 +11,7 @@ a PUT grant would make DF_MAX_UPLOAD_BYTES unenforceable.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import pathlib
@@ -88,17 +89,68 @@ def _startup() -> None:
     assert_persistence_enabled(_status.r)
 
 
-def identity_of(request: Request) -> str:
-    """Rate-limit key. API key when present, client IP otherwise.
+def _client_ip(request: Request) -> str:
+    """The address to rate-limit, honouring X-Forwarded-For only as far as trusted.
 
-    NOTE: behind a proxy this must read the trusted forwarded-for header instead
-    of the socket peer, or every request buckets to the proxy. Wire that up with
-    the ingress config -- do not trust X-Forwarded-For unconditionally.
+    `settings.trusted_proxy_hops` is the number of proxies between a client and
+    this process. 0 means trust nothing and use the socket peer.
+
+    Each proxy APPENDS the peer it received from, so X-Forwarded-For reads
+    left-to-right as oldest-to-newest and only the rightmost entries are
+    trustworthy. With N trusted hops the real client is the Nth entry from the
+    right; everything further left may have been supplied by the caller.
+
+    Taking the LEFTMOST entry -- the usual shortcut -- would let any client set
+    its own bucket by sending a header, which is worse than no limiting because
+    it looks like protection while providing none.
+
+    Every failure path falls back to the socket peer. That is deliberate: this
+    runs on every request, and a parsing bug that returned a constant would put
+    all traffic in one bucket and 429 the world. Falling back is at worst the
+    behaviour we already had.
+    """
+    peer = request.client.host if request.client else "unknown"
+    hops = settings.trusted_proxy_hops
+    if hops <= 0:
+        return peer
+
+    raw = request.headers.get("x-forwarded-for")
+    if not raw:
+        return peer
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) < hops:
+        # Fewer entries than proxies we expect: either the header was stripped
+        # or the deployment is not shaped the way it was configured. Trusting a
+        # short list would read a client-supplied value as the client IP.
+        return peer
+
+    candidate = parts[-hops]
+    try:
+        # Validated so a malformed or hostile value cannot become a bucket key.
+        addr = ipaddress.ip_address(candidate)
+    except ValueError:
+        return peer
+
+    # Unmap IPv4-in-IPv6. ip_address() alone is NOT enough: it renders
+    # "::ffff:198.51.100.22" as "::ffff:c633:6416", a different string from
+    # "198.51.100.22", so the same client would get two buckets just by sending
+    # the mapped form -- a one-header way to double its allowance. Caught by the
+    # test that asserts the two share a bucket.
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return str(mapped or addr)
+
+
+def identity_of(request: Request) -> str:
+    """Rate-limit key. API key when present, else the client IP.
+
+    An API key is preferred because it identifies a caller across addresses;
+    the IP is the fallback for anonymous traffic. See `_client_ip` for why the
+    IP is not simply the socket peer behind a proxy.
     """
     api_key = request.headers.get("x-api-key")
     if api_key:
         return f"key:{api_key[:32]}"
-    return f"ip:{request.client.host if request.client else 'unknown'}"
+    return f"ip:{_client_ip(request)}"
 
 
 def enforce_rate_limit(request: Request, cost: float = 1.0) -> str:
