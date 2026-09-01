@@ -31,7 +31,7 @@ import subprocess
 import sys
 import time
 
-from df.config import cpu_quota, usable_threads
+from df.config import cpu_quota, memory_limit_bytes, usable_threads
 
 # Order matters. Migrations must finish before anything opens a connection that
 # assumes the schema, and the gateway must come last so it is not accepting
@@ -90,6 +90,10 @@ def _pin_threads() -> None:
         os.environ.setdefault(var, n)
     quota = cpu_quota()
     _log(f"cpu quota={quota if quota else 'none (host)'} -> threads={n}")
+    # Logged for the same reason as the CPU quota: it is the number that decides
+    # whether video can work here, and it is not reported anywhere else.
+    mem = memory_limit_bytes()
+    _log(f"memory limit={f'{mem / 1e6:.0f} MB' if mem else 'none (host)'}")
 
 
 def _shutdown(signum, _frame) -> None:

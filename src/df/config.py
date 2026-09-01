@@ -26,6 +26,44 @@ def _bool(key: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def memory_limit_bytes() -> int | None:
+    """Memory this container may use, from the cgroup. None if unlimited.
+
+    Exists for the same reason `cpu_quota` does: the number that matters is the
+    cgroup's, and nothing else reports it. Railway's CLI does not expose it
+    (`limitOverride` is None, meaning "plan default", and the default is not
+    stated), so the only way to know is to read it from inside.
+
+    Worth knowing precisely, because it is the deciding input on video. Video
+    fails about 40% of the time on this host and `measured: yes` 2026-09-01 the
+    cost is NOT in this repo's code: `cv2.VideoCapture.read()` alone, retaining
+    nothing, peaks at 123.4 MB on a 1080p file, against 21.7 MB for twenty
+    extractions. Streaming the frames and removing a PNG round trip made it 32%
+    faster and barely moved peak RSS. So the question is whether the container
+    has ~150 MB of headroom, and that is a number, not an opinion.
+
+    cgroup v2 (`memory.max`) then v1 (`memory.limit_in_bytes`). v1 reports a
+    huge sentinel when unlimited, so anything at or above 2^62 is treated as no
+    limit rather than reported as a real figure.
+    """
+    for path in ("/sys/fs/cgroup/memory.max",
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            raw = pathlib.Path(path).read_text().strip()
+        except Exception:
+            continue
+        if raw == "max":
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value >= 1 << 62:        # v1's "unlimited" sentinel
+            return None
+        return value
+    return None
+
+
 def cpu_quota() -> float | None:
     """CPU cores this process may actually use, from the cgroup. None if unlimited.
 
