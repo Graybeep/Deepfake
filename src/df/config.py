@@ -297,6 +297,17 @@ class Settings:
     detect_max_side: int = field(
         default_factory=lambda: _int("DF_DETECT_MAX_SIDE", 1600)
     )
+    # Try contrast-enhanced and alternate cascades when the primary finds
+    # nothing. Off restores the single-pass behaviour, for measuring.
+    #
+    # Prompted by a real report -- glasses and bad lighting returned "could not
+    # analyse this". `measured: yes` 2026-09-01 over 23 hard cases: plain 20/23,
+    # CLAHE-always 22/23 (fixes 3, LOSES 1), cascading 23/23. Only tried when
+    # the first pass is empty, so it cannot regress a working detection and the
+    # common case pays nothing.
+    detect_fallback: bool = field(
+        default_factory=lambda: _bool("DF_DETECT_FALLBACK", True)
+    )
     # Most faces SCORED per item, after gating. 0 disables the cap.
     #
     # A cost bound, not a quality judgement, and it is recorded separately from

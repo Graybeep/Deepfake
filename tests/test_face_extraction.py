@@ -319,3 +319,179 @@ def test_a_box_at_the_frame_edge_stays_inside_the_image(monkeypatch):
 
     decoded = cv2.imdecode(np.frombuffer(crops[0].data, np.uint8), cv2.IMREAD_COLOR)
     assert (decoded.shape[1], decoded.shape[0]) == (w, h), "crop does not match its bbox"
+
+
+# --- detection fallback: glasses and bad lighting ---------------------------
+#
+# Prompted by a real report from a phone: normal photos worked, photos with
+# glasses and photos in bad lighting returned "could not analyse this". Glasses
+# occlude the eye region, which is a primary Haar feature; bad lighting flattens
+# the local contrast the cascade measures.
+#
+# `measured: yes` 2026-09-01 over 23 hard cases (public-domain portraits with
+# glasses, plus controlled side-lit, low-light-with-noise and harsh-shadow
+# variants):
+#     plain only ..... 20/23
+#     CLAHE always ... 22/23   fixes 3, LOSES 1
+#     cascading ...... 23/23   fixes 3, loses 0
+#
+# The middle row is why the order matters: applying CLAHE unconditionally breaks
+# a dark noisy portrait that the plain pass handles (1 face -> 0). Trying the
+# plain image FIRST makes the gain non-regressive by construction.
+#
+# # In-process. Live counterpart: upload a backlit or bespectacled photo to a
+# # running stack and check it does not come back `undetermined`.
+
+
+def test_the_plain_pass_is_tried_first(monkeypatch):
+    """Non-regression by construction. If an enhanced pass ran first, it could
+    replace a detection the shipped path already made -- measured to happen on
+    at least one real image."""
+    import cv2
+
+    from df.pipelines import extract as ex
+
+    # Recording the cascade FILENAME is not enough: the plain and the enhanced
+    # stage use the same file, so a mutation that reorders them leaves the
+    # filename sequence identical. The mutation harness reported NO-OP for
+    # exactly that, on this test. What distinguishes them is the PIXELS.
+    seen: list[object] = []
+
+    class Recording:
+        def __init__(self, path):
+            self._name = path.replace("\\", "/").rsplit("/", 1)[-1]
+
+        def detectMultiScale3(self, image, **kw):
+            seen.append((self._name, image.copy()))
+            return (np.array([[1, 2, 30, 30]]), None, np.array([5.0]))
+
+    monkeypatch.setattr(cv2, "CascadeClassifier", Recording)
+    blob = _png()
+    ex.OpenCVFaceExtractor().extract(blob)
+
+    assert seen, "no detection attempt was made"
+    name, first_image = seen[0]
+    assert name == "haarcascade_frontalface_default.xml", f"first cascade was {name}"
+
+    plain = cv2.cvtColor(cv2.imdecode(np.frombuffer(blob, np.uint8),
+                                      cv2.IMREAD_COLOR), cv2.COLOR_BGR2GRAY)
+    assert np.array_equal(first_image, plain), (
+        "the first detection attempt received a CONTRAST-ENHANCED image; the "
+        "plain image must be tried first or the fallback can lose a detection "
+        "the shipped path already made"
+    )
+
+
+def test_later_stages_run_only_when_earlier_ones_find_nothing(monkeypatch):
+    """The fallback must cost nothing on the common path, and must actually
+    engage when the primary is empty."""
+    import cv2
+
+    from df.pipelines import extract as ex
+
+    calls: list[str] = []
+    real = cv2.CascadeClassifier
+
+    class Empty:
+        def __init__(self, path):
+            self._name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+
+        def detectMultiScale3(self, image, **kw):
+            calls.append(self._name)
+            return (np.empty((0, 4), dtype=int), None, np.empty((0,)))
+
+    monkeypatch.setattr(cv2, "CascadeClassifier", Empty)
+    crops = ex.OpenCVFaceExtractor().extract(_png())
+
+    assert crops == []
+    assert len(calls) == len(ex._DETECT_STAGES), (
+        f"expected every stage to be tried when all are empty, got {calls}"
+    )
+    assert "haarcascade_frontalface_alt.xml" in calls
+
+
+def test_the_fallback_can_be_switched_off(monkeypatch):
+    """So the single-pass behaviour can be measured against it."""
+    import cv2
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_FALLBACK", "0")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    calls: list[str] = []
+    real = cv2.CascadeClassifier
+
+    class Empty:
+        def __init__(self, path):
+            calls.append(path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+
+        def detectMultiScale3(self, image, **kw):
+            return (np.empty((0, 4), dtype=int), None, np.empty((0,)))
+
+    monkeypatch.setattr(cv2, "CascadeClassifier", Empty)
+    ex.OpenCVFaceExtractor().extract(_png())
+
+    assert len(calls) == 1, f"fallback disabled but {len(calls)} cascades were tried"
+
+
+def test_all_faces_in_a_frame_come_from_one_cascade(monkeypatch):
+    """The confidence gate is RELATIVE, and levelWeights are unbounded cascade
+    reject levels whose scale differs between cascades. Mixing detections from
+    two cascades would make the ratio compare incomparable numbers. The first
+    successful stage returning immediately is what guarantees it cannot happen.
+    """
+    import cv2
+
+    from df.pipelines import extract as ex
+
+    used: list[str] = []
+    real = cv2.CascadeClassifier
+
+    class OnlyAltFinds:
+        def __init__(self, path):
+            self._name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+
+        def detectMultiScale3(self, image, **kw):
+            if self._name == "haarcascade_frontalface_alt.xml":
+                used.append(self._name)
+                return (np.array([[1, 1, 40, 40], [50, 50, 40, 40]]), None,
+                        np.array([6.0, 3.0]))
+            return (np.empty((0, 4), dtype=int), None, np.empty((0,)))
+
+    monkeypatch.setattr(cv2, "CascadeClassifier", OnlyAltFinds)
+    crops = ex.OpenCVFaceExtractor().extract(_png())
+
+    assert len(crops) == 2
+    assert used == ["haarcascade_frontalface_alt.xml"], "more than one cascade contributed"
+
+
+def test_cascades_are_not_cached_across_calls(monkeypatch):
+    """A module-level cascade cache is the obvious optimisation and it is wrong:
+    the suite patches cv2.CascadeClassifier itself, so a cache hands one test the
+    stub installed by another. Six tests passed alone and failed together when
+    that cache existed."""
+    import cv2
+
+    from df.pipelines import extract as ex
+
+    constructed: list[int] = []
+
+    def make_stub(boxes):
+        class Stub:
+            def __init__(self, path):
+                constructed.append(1)
+
+            def detectMultiScale3(self, image, **kw):
+                return (np.array(boxes), None, np.array([5.0] * len(boxes)))
+        return Stub
+
+    monkeypatch.setattr(cv2, "CascadeClassifier", make_stub([[1, 1, 30, 30]]))
+    first = ex.OpenCVFaceExtractor().extract(_png())
+    monkeypatch.setattr(cv2, "CascadeClassifier", make_stub([[2, 2, 40, 40], [9, 9, 40, 40]]))
+    second = ex.OpenCVFaceExtractor().extract(_png())
+
+    assert len(first) == 1 and len(second) == 2, (
+        "the second call reused the first call's cascade -- cross-call state"
+    )

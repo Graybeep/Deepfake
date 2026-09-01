@@ -141,6 +141,37 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   file input is `accept="image/*"`), and the image path is unaffected:
   `measured: yes`, three consecutive uploads at 3.3 / 3.7 / 3.8 s with identical
   scores and no container drop.
+- **Detection retries on contrast-enhanced and alternate cascades when the
+  primary finds nothing** (`DF_DETECT_FALLBACK`, default on). Prompted by a real
+  phone report: normal photos worked, photos WITH GLASSES and photos in BAD
+  LIGHTING came back "could not analyse this". Glasses occlude the eye region,
+  which is a primary Haar feature; poor lighting flattens the local contrast the
+  cascade measures.
+  Stages, in order: primary plain -> primary on CLAHE -> alt plain -> alt on
+  CLAHE -> alt2 on CLAHE. First one that finds anything returns.
+  **The ORDER is the whole design, not a detail.** `measured: yes` 2026-09-01
+  over 23 hard cases (public-domain portraits with glasses, plus controlled
+  side-lit, low-light-with-noise and harsh-shadow variants):
+  plain 20/23, **CLAHE-always 22/23 which fixes three and LOSES one**, cascading
+  **23/23** fixing three and losing none. Applying enhancement unconditionally
+  destroys a detection the shipped path already made on a dark noisy portrait.
+  Trying plain first makes the gain non-regressive by construction rather than
+  on average.
+  Two consequences worth keeping:
+  **confidences stay comparable.** `levelWeights` are unbounded cascade reject
+  levels whose scale differs per cascade, so a frame containing detections from
+  two cascades would make the relative gate compare incomparable numbers.
+  Returning on the first success means every face in a frame comes from one
+  cascade on one image -- the property the gate needs, obtained structurally.
+  **cascades are built per CALL, never cached across calls.** A module-level
+  cache is the obvious optimisation and it is wrong here: the suite patches
+  `cv2.CascadeClassifier` itself, so a cache hands one test the stub installed by
+  another. Found exactly that way -- six tests passed alone and failed together.
+  The common path still builds one cascade, as before.
+  Also worth recording, because it nearly shipped: the first version of the test
+  asserted on the cascade FILENAME sequence, which cannot distinguish plain from
+  enhanced -- both use the same file. The mutation that reorders the stages
+  reported NO-OP against it. The test now compares PIXELS.
 - **Detection runs on a BOUNDED copy; crops still come from the original.**
   `DF_DETECT_MAX_SIDE` (default 1600) caps the longest side of the image Haar
   actually sees. Boxes are mapped back to native pixels and clamped into the

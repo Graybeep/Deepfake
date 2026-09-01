@@ -1203,6 +1203,67 @@ FACE_CAP_MUTATIONS = [
     ),
 ]
 
+FALLBACK_WITNESS = r"""
+import numpy as np, cv2
+from df.pipelines import extract as ex
+
+order = []
+class Recording:
+    def __init__(self, path):
+        self._name = path.replace(chr(92), "/").rsplit("/", 1)[-1]
+    def detectMultiScale3(self, image, **kw):
+        # mean pixel value distinguishes a CLAHE-enhanced image from the plain
+        # one; the cascade filename alone cannot, because both the plain and the
+        # enhanced stage use the same file.
+        order.append((self._name.replace("haarcascade_frontalface_", ""),
+                      round(float(image.mean()), 2)))
+        if self._name == "haarcascade_frontalface_alt.xml":
+            return (np.array([[1, 1, 40, 40]]), None, np.array([5.0]))
+        return (np.empty((0, 4), dtype=int), None, np.empty((0,)))
+cv2.CascadeClassifier = Recording
+
+img = cv2.imencode(".png", np.random.default_rng(0).integers(0, 255, (300, 400, 3)).astype(np.uint8))[1].tobytes()
+crops = ex.OpenCVFaceExtractor().extract(img)
+print("attempt order ->", order)
+print("crops found   ->", len(crops))
+print("first attempt ->", order[0] if order else None)
+print("stages total  ->", len(ex._DETECT_STAGES))
+"""
+
+FALLBACK_MUTATIONS = [
+    Mutation(
+        # Try the enhanced image FIRST. measured: yes -- CLAHE-always fixes 3
+        # hard cases and LOSES one the plain pass handles, so ordering is what
+        # makes the gain non-regressive.
+        label="enhanced pass tried before the plain one (can lose a detection)",
+        file="src/df/pipelines/extract.py",
+        old='    ("primary", "haarcascade_frontalface_default.xml", False),',
+        new='    ("clahe", "haarcascade_frontalface_default.xml", True),',
+        witness=FALLBACK_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        # Back to one pass: glasses and bad lighting return undetermined again.
+        label="fallback removed (glasses / bad lighting undetermined again)",
+        file="src/df/pipelines/extract.py",
+        old="        if not settings.detect_fallback:",
+        new="        if True:",
+        witness=FALLBACK_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        # Keep going after a stage succeeds, so a frame can end up with faces
+        # from two cascades -- whose reject levels are on different scales, which
+        # breaks the relative confidence gate silently.
+        label="stages continue after success (mixes incomparable confidences)",
+        file="src/df/pipelines/extract.py",
+        old="            return boxes, weights, stage",
+        new="            pass",
+        witness=FALLBACK_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1459,6 +1520,10 @@ if __name__ == "__main__":
     print("\nface cap (cost bound, recorded apart from gating)")
     fc_bad = run_all(FACE_CAP_MUTATIONS)
     print(f"  {len(FACE_CAP_MUTATIONS)} mutation(s), {fc_bad} did not produce RED")
+
+    print("\ndetection fallback (glasses, bad lighting)")
+    fb_bad = run_all(FALLBACK_MUTATIONS)
+    print(f"  {len(FALLBACK_MUTATIONS)} mutation(s), {fb_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

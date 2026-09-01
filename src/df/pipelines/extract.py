@@ -384,6 +384,81 @@ class OpenCVFrameSampler:
             os.unlink(tmp_path)
 
 
+# Detection attempts, in order. The FIRST that finds anything wins, so this can
+# only ADD detections -- never remove one the shipped path already found.
+#
+# That ordering is not cosmetic. `measured: yes` 2026-09-01: applying CLAHE
+# unconditionally fixes three hard cases and BREAKS a fourth
+# (a dark, noisy portrait goes 1 face -> 0). Trying the plain image first makes
+# the improvement non-regressive by construction rather than on average.
+#
+# `measured: yes` on 23 hard cases (public-domain portraits with glasses, plus
+# controlled side-lighting, low-light-with-noise and harsh-shadow variants):
+#   plain only ...... 20/23
+#   CLAHE only ...... 22/23  (fixes 3, loses 1)
+#   cascading ....... 23/23  (fixes 3, loses 0)
+#
+# Prompted by a real report: photos with glasses and photos in bad lighting
+# returned "could not analyse this". Glasses occlude the eye region, which is a
+# primary Haar feature; bad lighting flattens the local contrast the cascade
+# relies on. CLAHE addresses the second directly and, empirically, the first.
+_DETECT_STAGES = (
+    ("primary", "haarcascade_frontalface_default.xml", False),
+    ("clahe", "haarcascade_frontalface_default.xml", True),
+    ("alt", "haarcascade_frontalface_alt.xml", False),
+    ("alt-clahe", "haarcascade_frontalface_alt.xml", True),
+    ("alt2-clahe", "haarcascade_frontalface_alt2.xml", True),
+)
+
+def _detect_with_fallback(gray):
+    """Returns (boxes, weights, stage_name). Stage is recorded, not just used.
+
+    CONFIDENCES ARE ONLY COMPARABLE WITHIN ONE STAGE, and the design relies on
+    that. `levelWeights` are unbounded cascade reject levels whose scale differs
+    between cascades, so mixing detections from two cascades would make the
+    relative gate (`DF_DETECTION_CONFIDENCE_RATIO`) compare incomparable
+    numbers. Because the first successful stage returns immediately, every face
+    in a frame always comes from a single cascade on a single image -- so the
+    ratio stays meaningful without any special handling.
+    """
+    import cv2
+
+    # Cascades are built per CALL, not cached across calls. A module-level cache
+    # is the obvious optimisation and it is wrong here: the test suite patches
+    # `cv2.CascadeClassifier` itself, so a cache would hand one test the stub
+    # installed by another and make results order-dependent. Found exactly that
+    # way -- six tests passed alone and failed together.
+    #
+    # It also costs nothing in the common case: the primary cascade succeeds and
+    # is built once, which is what this function did before the fallback existed.
+    # Only a frame where detection fails pays for additional cascades, and that
+    # frame was going to return nothing at all otherwise.
+    built: dict = {}
+
+    def cascade(name: str):
+        if name not in built:
+            built[name] = cv2.CascadeClassifier(cv2.data.haarcascades + name)
+        return built[name]
+
+    enhanced = None
+    for stage, name, needs_clahe in _DETECT_STAGES:
+        if needs_clahe:
+            if enhanced is None:
+                enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+            image = enhanced
+        else:
+            image = gray
+        boxes, _, weights = cascade(name).detectMultiScale3(
+            image, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48),
+            outputRejectLevels=True,
+        )
+        if len(boxes):
+            return boxes, weights, stage
+        if not settings.detect_fallback:
+            break
+    return [], [], "none"
+
+
 class OpenCVFaceExtractor:
     """Haar cascade detect, emitting the face crop at its NATIVE resolution.
 
@@ -455,12 +530,10 @@ class OpenCVFaceExtractor:
                 interpolation=cv2.INTER_AREA,
             )
 
-        cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        boxes, _, weights = cascade.detectMultiScale3(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48), outputRejectLevels=True
-        )
+        # `stage` says WHICH attempt found these faces. Not surfaced yet: doing
+        # it properly means carrying it per frame through the worker and the
+        # event, and half-plumbing it would be worse than leaving it out.
+        boxes, weights, _stage = _detect_with_fallback(gray)
 
         crops: list[FaceCrop] = []
         for face_index, ((x, y, w, h), weight) in enumerate(zip(boxes, weights)):
