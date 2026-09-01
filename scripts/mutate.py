@@ -851,6 +851,89 @@ LANDING_MUTATIONS = [
     ),
 ]
 
+DETECT_CAP_WITNESS = r"""
+import os
+os.environ["DF_DETECT_MAX_SIDE"] = "800"
+import cv2, numpy as np
+from df.pipelines.extract import OpenCVFaceExtractor
+
+rng = np.random.default_rng(0)
+
+
+def photo(w, h):
+    return cv2.imencode(".jpg", rng.integers(0, 255, (h, w, 3), dtype=np.uint8))[1].tobytes()
+
+
+def probe(label, w, h, box):
+    # box: None -> flush to the bottom-right corner of the DETECTION image.
+    seen = []
+
+    def spy(self, image, **kw):
+        ih, iw = image.shape[:2]
+        seen.append((iw, ih))
+        edge = 31 if iw < 800 or ih <= 800 else 40
+        b = box if box is not None else [iw - edge, ih - edge, edge, edge]
+        return (np.array([b]), None, np.array([5.0]))
+
+    cv2.CascadeClassifier.detectMultiScale3 = spy
+    crops = OpenCVFaceExtractor().extract(photo(w, h))
+    bb = crops[0].bbox if crops else None
+    dec = cv2.imdecode(np.frombuffer(crops[0].data, np.uint8), cv2.IMREAD_COLOR) if crops else None
+    dims = (dec.shape[1], dec.shape[0]) if dec is not None else None
+    inside = None
+    if bb:
+        inside = bb[0] + bb[2] <= w and bb[1] + bb[3] <= h
+    print(f"{label}: detected_at={seen[0]} bbox={bb} crop={dims} inside={inside}")
+
+
+# large image, centred box   -> the cap and the back-mapping
+probe("large-centred ", 3200, 2400, [100, 50, 60, 60])
+# large image, edge box      -> the clamp
+probe("large-edge    ", 3200, 2400, None)
+# 3200/800 divides evenly, so the flush box lands exactly on the boundary and
+# the clamp is never reached. 801x840 with a 31 px box overflows by 1 px --
+# found by sweeping, after the clamp mutation reported NO-OP.
+probe("tight-edge    ", 801, 840, None)
+# small image, centred box   -> the cap must be a ceiling, not a target
+probe("small-centred ", 640, 480, [10, 10, 40, 40])
+"""
+
+
+DETECT_CAP_MUTATIONS = [
+    Mutation(
+        label="detect at full resolution again (the OOM)",
+        file="src/df/pipelines/extract.py",
+        old="        if cap > 0 and max(full_h, full_w) > cap:",
+        new="        if False:",
+        witness=DETECT_CAP_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        label="boxes not mapped back to native pixels (wrong crop, still scores)",
+        file="src/df/pipelines/extract.py",
+        old="            if scale != 1.0:",
+        new="            if False:",
+        witness=DETECT_CAP_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        label="edge box not clamped into the image",
+        file="src/df/pipelines/extract.py",
+        old="                w = max(1, min(round(w / scale), full_w - x))",
+        new="                w = max(1, round(w / scale))",
+        witness=DETECT_CAP_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+    Mutation(
+        label="cap treated as a target, small images upscaled",
+        file="src/df/pipelines/extract.py",
+        old="        if cap > 0 and max(full_h, full_w) > cap:",
+        new="        if cap > 0:",
+        witness=DETECT_CAP_WITNESS,
+        test="tests/test_face_extraction.py",
+    ),
+]
+
 DECODE_WITNESS = (
     "import cv2, numpy as np;"
     "from df.pipelines.extract import decode_image, sniff_format;"
@@ -1091,6 +1174,10 @@ if __name__ == "__main__":
     print("\ndetection gate")
     g_bad = run_all(GATE_MUTATIONS)
     print(f"  {len(GATE_MUTATIONS)} mutation(s), {g_bad} did not produce RED")
+
+    print("\nbounded face detection (the phone-photo OOM)")
+    dc_bad = run_all(DETECT_CAP_MUTATIONS)
+    print(f"  {len(DETECT_CAP_MUTATIONS)} mutation(s), {dc_bad} did not produce RED")
 
     print("\nlanding page (content negotiation, forbidden claims in copy)")
     l_bad = run_all(LANDING_MUTATIONS)

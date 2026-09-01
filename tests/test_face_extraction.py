@@ -142,3 +142,180 @@ def test_haar_confidence_stays_within_the_aggregation_weight_range():
     fail, it would silently reweight the mean."""
     for w in (-100.0, -1.0, 0.5, 2.0, 9.99, 10.0, 10.01, 1e6):
         assert 0.0 <= _haar_confidence(w) <= 1.0
+
+
+# --- detection is bounded, cropping is not -----------------------------------
+#
+# The bug: a 12.2 MP phone photo (4032x3024) sat in `preprocessing` for 85+
+# seconds on the deployed service and then took the container down with SIGKILL,
+# returning `undetermined`. `measured: yes` 2026-09-01, reproduced deliberately
+# against the deploy. Haar ran on the full-resolution image, and the peak RSS of
+# a single extract() on an 8.4 MP photo was +143.9 MB -- next to a resident B7,
+# which is why the kernel killed the inference worker and made a preprocessing
+# problem look like an inference one.
+#
+# `measured: yes` for the fix on the same 8.4 MP photo: +52.7 MB peak (2.7x
+# less), 1.05s -> 0.35s, same three faces, boxes within ~2% of the full-res ones.
+#
+# # In-process. Live counterpart: upload a >8 MP image to a running stack and
+# # watch /healthz stay up -- scripts/smoke_compose.py does not cover image size.
+
+
+def _photo(width: int, height: int) -> bytes:
+    """A synthetic image with real high-frequency detail at a known size.
+
+    Not an upscaled small image: that was the first fixture here and it made the
+    cap look like it destroyed detection (0 faces at 1600 against 2 junk boxes at
+    full size), because upscaling leaves no genuine detail for a texture cascade
+    at any scale. The conclusion would have been exactly backwards.
+    """
+    import cv2
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 255, (height, width, 3), dtype=np.uint8)
+    return cv2.imencode(".jpg", img)[1].tobytes()
+
+
+def test_detection_runs_on_a_bounded_image(monkeypatch):
+    """The cap must actually reach cv2, not merely exist in config."""
+    import cv2
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_MAX_SIDE", "800")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    seen: list[tuple[int, int]] = []
+    real = cv2.CascadeClassifier.detectMultiScale3
+
+    def spy(self, image, **kwargs):
+        seen.append((image.shape[1], image.shape[0]))
+        return real(self, image, **kwargs)
+
+    monkeypatch.setattr(cv2.CascadeClassifier, "detectMultiScale3", spy)
+    ex.OpenCVFaceExtractor().extract(_photo(3200, 2400))
+
+    assert seen, "detectMultiScale3 was never called"
+    assert max(seen[0]) == 800, f"detection ran at {seen[0]}, not capped to 800"
+
+
+def test_the_cap_can_be_switched_off(monkeypatch):
+    """0 restores full-resolution detection, so the change is reversible on a
+    running deployment without a rebuild."""
+    import cv2
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_MAX_SIDE", "0")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    seen: list[tuple[int, int]] = []
+    real = cv2.CascadeClassifier.detectMultiScale3
+
+    def spy(self, image, **kwargs):
+        seen.append((image.shape[1], image.shape[0]))
+        return real(self, image, **kwargs)
+
+    monkeypatch.setattr(cv2.CascadeClassifier, "detectMultiScale3", spy)
+    ex.OpenCVFaceExtractor().extract(_photo(2000, 1500))
+
+    assert seen[0] == (2000, 1500)
+
+
+def test_a_small_image_is_never_upscaled(monkeypatch):
+    """The cap is a ceiling, not a target. Enlarging a small image would invent
+    detail and slow down the common case for nothing."""
+    import cv2
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_MAX_SIDE", "1600")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    seen: list[tuple[int, int]] = []
+    real = cv2.CascadeClassifier.detectMultiScale3
+
+    def spy(self, image, **kwargs):
+        seen.append((image.shape[1], image.shape[0]))
+        return real(self, image, **kwargs)
+
+    monkeypatch.setattr(cv2.CascadeClassifier, "detectMultiScale3", spy)
+    ex.OpenCVFaceExtractor().extract(_photo(640, 480))
+
+    assert seen[0] == (640, 480)
+
+
+def test_boxes_are_mapped_back_to_native_pixels(monkeypatch):
+    """The geometry seam, which this file has already got wrong twice.
+
+    Detection happens on a downscaled copy, so every box comes back in
+    downscaled coordinates and MUST be multiplied out before cropping. If it is
+    not, the crop is taken from the wrong part of the image -- and nothing
+    downstream can tell, because a wrong crop is still a valid image that still
+    scores. The detection would be silently reading the wrong face.
+
+    The cascade is stubbed to return one known box so the arithmetic is checked
+    exactly rather than through whatever a real detector happens to find.
+    """
+    import cv2
+    import numpy as np
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_MAX_SIDE", "800")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    # 3200x2400 capped at 800 -> scale 0.25, so a box at 100,50,60x60 on the
+    # detection image describes 400,200,240x240 in the original.
+    def fake(self, image, **kwargs):
+        assert max(image.shape[:2]) == 800
+        return (np.array([[100, 50, 60, 60]]), None, np.array([5.0]))
+
+    monkeypatch.setattr(cv2.CascadeClassifier, "detectMultiScale3", fake)
+    crops = ex.OpenCVFaceExtractor().extract(_photo(3200, 2400))
+
+    assert len(crops) == 1
+    assert crops[0].bbox == (400, 200, 240, 240)
+
+    # and the pixels handed to the model must match the box that was recorded
+    decoded = cv2.imdecode(np.frombuffer(crops[0].data, np.uint8), cv2.IMREAD_COLOR)
+    assert (decoded.shape[1], decoded.shape[0]) == (240, 240)
+
+
+def test_a_box_at_the_frame_edge_stays_inside_the_image(monkeypatch):
+    """Rounding outward can push x+w past the width. numpy slicing does not
+    raise for that -- it returns a short crop -- so the bbox on the audit row
+    would describe pixels that were never scored."""
+    import cv2
+    import numpy as np
+
+    from df.config import Settings
+    from df.pipelines import extract as ex
+
+    monkeypatch.setenv("DF_DETECT_MAX_SIDE", "800")
+    monkeypatch.setattr(ex, "settings", Settings())
+
+    def fake(self, image, **kwargs):
+        h, w = image.shape[:2]
+        # flush against the bottom-right corner of the detection image
+        return (np.array([[w - 31, h - 31, 31, 31]]), None, np.array([5.0]))
+
+    monkeypatch.setattr(cv2.CascadeClassifier, "detectMultiScale3", fake)
+    # 801x840, NOT 3200x2400. The first version of this test used 3200x2400,
+    # where 3200/800 divides evenly: the flush box maps back to exactly the
+    # boundary, the clamp is never reached, and the test passed against code
+    # with no clamp at all. The mutation harness reported NO-OP and that is how
+    # it was found. Sweeping for real overflow cases gives 801x840 with a 31 px
+    # box, which lands 1 px outside.
+    crops = ex.OpenCVFaceExtractor().extract(_photo(801, 840))
+
+    x, y, w, h = crops[0].bbox
+    assert x + w <= 801 and y + h <= 840, f"box {crops[0].bbox} escapes the image"
+
+    decoded = cv2.imdecode(np.frombuffer(crops[0].data, np.uint8), cv2.IMREAD_COLOR)
+    assert (decoded.shape[1], decoded.shape[0]) == (w, h), "crop does not match its bbox"

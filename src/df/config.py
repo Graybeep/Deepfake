@@ -235,6 +235,30 @@ class Settings:
     detection_confidence_ratio: float = field(
         default_factory=lambda: _float("DF_DETECTION_CONFIDENCE_RATIO", 0.4)
     )
+    # Longest side, in pixels, of the image Haar actually runs on. Crops are
+    # still taken from the FULL-RESOLUTION original -- this bounds detection
+    # only, never the crop.
+    #
+    # `measured: yes` 2026-09-01 on the deployed service: a 12.2 MP upload
+    # (4032x3024, 1.7 MB on disk, 36.6 MB decoded) sat in `preprocessing` for
+    # 85+ seconds and then took the container down with SIGKILL, and the job
+    # came back `undetermined`. That is the ordinary case, not an edge one: it
+    # is what a current phone camera produces, and "upload a photo from your
+    # phone" is the demo.
+    #
+    # Detection accuracy is the other half, and it argues the same way.
+    # `minSize=(48, 48)` is only meaningful relative to the image: at 1.2 MP it
+    # found one 523x523 face, at 12.2 MP it found three boxes of which the first
+    # was 52x52 -- noise, because a real face there is ~1500 px and a 48 px
+    # window is looking at skin texture. Detecting at a bounded size makes the
+    # minimum mean the same thing whatever the camera did.
+    #
+    # Env-tunable so this can be adjusted on a running deployment without a
+    # rebuild. 0 or negative disables the cap and restores full-resolution
+    # detection.
+    detect_max_side: int = field(
+        default_factory=lambda: _int("DF_DETECT_MAX_SIDE", 1600)
+    )
     audio_chunk_seconds: float = field(
         default_factory=lambda: _float("DF_AUDIO_CHUNK_SECONDS", 3.0)
     )

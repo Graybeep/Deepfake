@@ -54,6 +54,31 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   worker runs the stub and no test covered the branch), and even when it worked
   it destroyed the aspect ratio *before* the careful resize, making that step a
   no-op. Two resizes, and the wrong one won.
+- **Detection runs on a BOUNDED copy; crops still come from the original.**
+  `DF_DETECT_MAX_SIDE` (default 1600) caps the longest side of the image Haar
+  actually sees. Boxes are mapped back to native pixels and clamped into the
+  frame before cropping, so the "crops at native resolution" rule above is
+  unchanged -- one scalar, applied once, to a box.
+  The bug it fixes was the demo path itself. `measured: yes` 2026-09-01,
+  reproduced against the deployed service: a 12.2 MP upload (4032x3024, 1.7 MB
+  on disk, **36.6 MB decoded**) sat in `preprocessing` for 85+ seconds and then
+  took the container down -- `gpu-inference exited with -9`, SIGKILL, the OOM
+  killer picking the largest process. The job returned `undetermined`. A phone
+  photo is 12 MP, and "upload a photo from your phone" is the demo.
+  Note the misdirection: preprocessing caused it, the INFERENCE worker died,
+  because that is the process holding a resident B7. Peak RSS of one `extract()`
+  on an 8.4 MP photo, `measured: yes`: **+143.9 MB uncapped vs +52.7 MB at
+  1600** (2.7x), and 1.05s vs 0.35s (3x). Same three faces, boxes within ~2%.
+  Compressed upload size does not bound any of this -- 1.7 MB on disk decoded to
+  36.6 MB -- so `DF_MAX_UPLOAD_BYTES` cannot substitute for it.
+  It is also an ACCURACY fix, which is the part that would have been missed:
+  `minSize=(48, 48)` only means something relative to the image. At 1.2 MP the
+  cascade found one 523x523 face; at 12.2 MP it returned three boxes whose first
+  was 52x52 -- noise, because a real face there is ~1500 px and a 48 px window
+  is reading skin texture. Detecting at a bounded size makes the floor mean the
+  same thing whatever camera produced the file.
+  1200 was too aggressive (`measured: yes`: dropped a real 138 px face). 1600
+  keeps every detection the full-resolution pass found.
 - **Detection confidence on the real path is uncalibrated and arbitrary.** Haar's
   reject level is an unbounded cascade score, not a probability; `_haar_confidence`
   squashes it by dividing by 10. Monotone, bounded, and nothing more — yet it

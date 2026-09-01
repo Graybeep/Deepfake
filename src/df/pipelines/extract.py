@@ -367,6 +367,29 @@ class OpenCVFaceExtractor:
             return []
 
         gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+
+        # Detect on a bounded copy; crop from the original. See
+        # Settings.detect_max_side for why -- a 12 MP phone photo killed the
+        # container and produced 52x52 junk detections at the same time.
+        #
+        # The scale factor is inverted below to map boxes back to native
+        # coordinates. This is the geometry seam this file has already got wrong
+        # twice, so it is deliberately the ONLY transform: one scalar, applied
+        # once, to a box -- not a resize of any pixels that reach the model.
+        full_h, full_w = gray.shape[:2]
+        cap = settings.detect_max_side
+        scale = 1.0
+        if cap > 0 and max(full_h, full_w) > cap:
+            scale = cap / max(full_h, full_w)
+            # INTER_AREA is the correct filter for downscaling; INTER_LINEAR
+            # aliases, which invents high-frequency detail for a texture-based
+            # cascade to trip on.
+            gray = cv2.resize(
+                gray,
+                (max(1, round(full_w * scale)), max(1, round(full_h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
         cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
@@ -376,6 +399,16 @@ class OpenCVFaceExtractor:
 
         crops: list[FaceCrop] = []
         for face_index, ((x, y, w, h), weight) in enumerate(zip(boxes, weights)):
+            if scale != 1.0:
+                # Back to native pixels, then clamped INTO the image. Rounding
+                # outward on a box at the frame edge can put x+w past the width,
+                # and numpy slicing would silently return a short crop rather
+                # than raise -- so the bbox recorded on the row would not
+                # describe the pixels that were scored.
+                x = min(max(0, round(x / scale)), full_w - 1)
+                y = min(max(0, round(y / scale)), full_h - 1)
+                w = max(1, min(round(w / scale), full_w - x))
+                h = max(1, min(round(h / scale), full_h - y))
             crop = arr[y : y + h, x : x + w]
             if crop.size == 0:
                 continue
