@@ -126,22 +126,33 @@ API gave 7 log-mel spectrogram chunks, all 7 scored, coverage 1.0, `uncertain`
 at 40.2638, media deleted. Every stage real, only the scorer a SHA-256 of the
 bytes -- and the advisory says exactly that.
 
-**Video**, if asked: "It works through the API for short clips. It's not in the
-UI because the frame sampler holds every sampled frame in memory at once, so a
-phone-resolution clip either blows our request timeout or takes the container
-down. Fixing that properly means streaming frames, and I'd rather ship the
-honest limit than a feature that falls over in front of you."
+**Video**, if asked: "The video pipeline is real and produces correct results,
+but it is not reliable on our current host, so it is not in the product. The
+frame sampler materialises every sampled frame in memory at once, and this
+container is already holding a 66-million-parameter model, so whether a clip
+completes depends on how much memory the container has left rather than on the
+clip. I would rather say that than ship a button that works when you are not
+watching."
 
-`measured: yes` on the deployed service:
+`measured: yes` 2026-09-01, and the last row is the point:
 
-| clip | outcome |
+| test | outcome |
 |---|---|
-| 4 s @ 720p, 8 frames | works — all 8 scored, coverage 1.0, `likely_authentic`, 15.4 s |
-| 20 s @ 720p, 40 frames | `gpu-inference exited with -9` — container killed |
-| 10 s @ 1080p, capped to 12 frames | 107 s (UI gives up at 90 s), container down and back twice |
+| 4 s @ 720p, 8 frames | clean, all 8 scored, coverage 1.0, 15.4 s |
+| 20 s @ 720p, 40 frames | `gpu-inference exited with -9` — OOM |
+| 10 s @ 1080p, 12 frames | 107 s, container down and back twice |
+| **same 20 s clip, 3 runs, 8-frame cap** | **201 s never finished / 53 s crashed-then-recovered / 4.2 s clean** |
 
-One 1080p frame is 3.4 MB PNG-encoded; twelve is 41 MB, beside a resident B7.
-`DF_VIDEO_MAX_FRAMES` is pinned at 12 so a direct API call does less damage.
+Three identical requests, three different outcomes. Lowering
+`DF_VIDEO_MAX_FRAMES` from 300 to 12 to 8 did not make it deterministic, because
+frame count is not the variable — accumulated container memory is. That is why
+"short clips work" would have been the wrong thing to claim.
+
+**The image path is unaffected**, which is the check that matters: three
+consecutive uploads at 3.3 / 3.7 / 3.8 s, identical scores, container never
+dropped. Video jobs cannot be created from the UI at all
+(`media_type: 'image'` is hardcoded), so none of the above is reachable during
+a demo.
 
 **Both answers are stronger than the feature would have been.** Naming a limit
 with numbers behind it reads as knowing your own system; a video button that

@@ -54,6 +54,27 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   worker runs the stub and no test covered the branch), and even when it worked
   it destroyed the aspect ratio *before* the careful resize, making that step a
   no-op. Two resizes, and the wrong one won.
+- **Video works but is NOT reliable on the current host, and the frame cap is
+  not the fix.** `OpenCVFrameSampler.sample()` returns a fully materialised
+  `list[Frame]` in which every `Frame.data` is a PNG-encoded full frame, so peak
+  memory scales with resolution AND length before a single frame is scored. One
+  1080p frame is 3.4 MB encoded (`measured: yes`).
+  `measured: yes` 2026-09-01 on the deployed service, and the third row is the
+  one that matters: 4 s @ 720p (8 frames) ran clean in 15.4 s; 20 s @ 720p (40
+  frames) killed the inference worker with SIGKILL; 10 s @ 1080p at a 12-frame
+  cap took 107 s and took the container down twice; and **the same 20 s clip run
+  three times at an 8-frame cap gave 201 s never-finished, 53 s
+  crashed-then-recovered, and 4.2 s clean.** Identical input, three outcomes.
+  So `DF_VIDEO_MAX_FRAMES` (300 -> 12 -> 8) is a damage limiter, not a fix: the
+  variable is how much memory the container has left, not the frame count. Do
+  not read a passing video job as evidence the path is sound. The real repair is
+  streaming frames — yield one at a time from the sampler so only one decoded
+  frame plus one crop is ever resident — and it needs the queue payload and the
+  CPU worker's loop changed with it.
+  Video is unreachable from the UI (`media_type: 'image'` is hardcoded and the
+  file input is `accept="image/*"`), and the image path is unaffected:
+  `measured: yes`, three consecutive uploads at 3.3 / 3.7 / 3.8 s with identical
+  scores and no container drop.
 - **Detection runs on a BOUNDED copy; crops still come from the original.**
   `DF_DETECT_MAX_SIDE` (default 1600) caps the longest side of the image Haar
   actually sees. Boxes are mapped back to native pixels and clamped into the

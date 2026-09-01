@@ -19,7 +19,7 @@ public.**
 | `PORT` | injected by the platform | The launcher reads it; do not hardcode 8000 |
 | `DF_TRUSTED_PROXY_HOPS` | `2` on Railway | Proxies between client and app. **Determine it, do not guess** — see below |
 | `DF_DETECT_MAX_SIDE` | `1600` | Longest side Haar detects on. Crops stay native. 0 disables |
-| `DF_VIDEO_MAX_FRAMES` | `12` | Frames sampled per video. The sampler holds them all at once |
+| `DF_VIDEO_MAX_FRAMES` | `8` | Frames sampled per video. The sampler holds them ALL in memory at once, so this bounds damage — it does not make video reliable |
 | `DF_QUEUE_RECLAIM_MS` | `45000` | Must stay BELOW the UI's 90 s deadline, or an orphaned job recovers after the page has already given up |
 
 `DF_AUDIO_WEIGHTS` stays unset — audio has no checkpoint and falls back to the
