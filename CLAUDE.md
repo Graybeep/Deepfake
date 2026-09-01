@@ -54,6 +54,16 @@ Audio: Ingest → Chunk → Spectrogram → EfficientNet (audio model) → Aggre
   worker runs the stub and no test covered the branch), and even when it worked
   it destroyed the aspect ratio *before* the careful resize, making that step a
   no-op. Two resizes, and the wrong one won.
+- **The container has 1000 MB, `measured: yes` 2026-09-01**, read from the
+  cgroup at boot and logged by `deploy.py` beside the CPU quota. Railway does
+  not report it (`limitOverride` is None, i.e. plan default, and the default is
+  not stated), so it was unknown until the launcher was made to print it.
+  That number is the whole video story. Five processes share it, one holding a
+  66M-parameter B7, and a 1080p `VideoCapture` wants ~123 MB on top of whatever
+  the container is already using. Images peak around 50 MB and always fit; video
+  sometimes does and sometimes does not, which is exactly the 3/5 pattern
+  observed. **Video is a resource problem, not a code problem, and the remaining
+  fix is more memory rather than more application work.**
 - **Video is STILL not reliable after streaming the frames. 3/5 clean.**
   `measured: yes` 2026-09-01, five consecutive runs of the same 20 s 720p clip
   at an 8-frame cap against the deployed service, after the streaming fix:

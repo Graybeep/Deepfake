@@ -143,11 +143,21 @@ watching."
 | 10 s @ 1080p, 12 frames | 107 s, container down and back twice |
 | **same 20 s clip, 3 runs, 8-frame cap** | **201 s never finished / 53 s crashed-then-recovered / 4.2 s clean** |
 | same clip, 5 runs, **after** streaming the frames | **3/5 clean** — 54.5 s crashed / 4.6 / 4.1 / 4.1 clean / 99.4 s crashed |
+| same clip, 5 runs, after removing the PNG round trip too | **3/5 clean** — the round trip was 32% of the *time*, none of the memory |
+| **container memory limit** | **1000 MB** (`measured: yes`, read from the cgroup at boot) |
 
 Three identical requests, three different outcomes. Lowering
 `DF_VIDEO_MAX_FRAMES` from 300 to 12 to 8 did not make it deterministic, because
 frame count is not the variable — accumulated container memory is. That is why
 "short clips work" would have been the wrong thing to claim.
+
+**Why it cannot be fixed in code:** `cv2.VideoCapture.read()` alone, retaining
+nothing, peaks at 123.4 MB on a 1080p file — against 21.7 MB for twenty face
+extractions. The memory is inside OpenCV's decoder. `BUFFERSIZE=1` changes
+nothing (122.9 MB) and seeking to each sampled frame is slightly worse (127.0 MB,
+though 24% faster). Five processes share 1000 MB and one of them holds a B7, so
+video needs headroom that is not there. Raising the container's memory is the
+fix; more application work is chasing the wrong layer.
 
 **The image path is unaffected**, which is the check that matters: three
 consecutive uploads at 3.3 / 3.7 / 3.8 s, identical scores, container never
