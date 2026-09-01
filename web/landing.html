@@ -28,7 +28,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deepfake Detection — Don't trust it. Test it.</title>
-<meta name="description" content="Three forensic pipelines for video, image and audio. Per-face evidence, honest caveats, and a score that tells you when it doesn't know.">
+<meta name="description" content="Forensic analysis for images and video. Per-face evidence, honest caveats, and a score that tells you when it doesn't know.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -182,7 +182,7 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
 /* ── pipeline cards ───────────────────────────────────────────────────── */
 .grid-3{display:grid;gap:var(--space-3);grid-template-columns:1fr}
 @media(min-width:720px){.grid-3{grid-template-columns:repeat(2,1fr)}}
-@media(min-width:1000px){.grid-3{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:1000px){.grid-3{grid-template-columns:repeat(2,1fr)}}
 
 .pipe{display:flex;flex-direction:column;gap:var(--space-2);
   transition:transform var(--t-mid) var(--ease-back),border-color var(--t-mid)}
@@ -243,7 +243,9 @@ a:focus-visible,button:focus-visible,[tabindex]:focus-visible{
 
 /* ── model profiles ───────────────────────────────────────────────────── */
 .grid-2{display:grid;gap:var(--space-3);grid-template-columns:1fr}
-@media(min-width:860px){.grid-2{grid-template-columns:repeat(2,1fr)}}
+/* one model card since audio was removed; a lone card in a 2-col grid
+   stretches to half width and looks like a rendering bug */
+.grid-2{max-width:560px}
 .model{display:flex;flex-direction:column;gap:var(--space-2)}
 .model-top{display:flex;gap:var(--space-2);align-items:flex-start}
 .avatar{width:62px;height:62px;flex:none;border-radius:14px;display:grid;place-items:center;
@@ -321,9 +323,6 @@ footer a:hover{color:var(--primary)}
     stroke-linecap="round" stroke-linejoin="round">
     <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/>
     <path d="m21 15-4.5-4.5L3 21"/></symbol>
-  <symbol id="i-audio" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-    stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2 12h3l3-8 4 16 3-11 2 3h5"/></symbol>
   <symbol id="i-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">
     <rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
@@ -361,9 +360,9 @@ footer a:hover{color:var(--primary)}
     </div>
     <h1 class="reveal" style="--d:60ms">Don't trust it.<span class="hit">Test it.</span></h1>
     <p class="lede reveal" style="--d:120ms">
-      Three forensic pipelines for video, image and audio — sampling frames, finding faces,
-      scoring every one of them, and rolling the worst case up into a verdict.
-      You get the evidence behind the number, not just the number.
+      Sampling frames, finding faces, scoring every one of them, and rolling the
+      worst case up into a verdict. You get the evidence behind the number, not
+      just the number.
     </p>
     <div class="cta-row reveal" style="--d:180ms">
       <a class="btn btn-primary" href="/app">Analyze media<svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
@@ -371,9 +370,9 @@ footer a:hover{color:var(--primary)}
     </div>
 
     <div class="stats reveal" style="--d:240ms">
-      <div class="stat"><b data-count="3">3</b><span>Pipelines</span></div>
+      <div class="stat"><b data-count="2">2</b><span>Pipelines</span></div>
       <div class="stat"><b data-count="2.1" data-suffix="s">2.1s</b><span>Per image</span></div>
-      <div class="stat"><b data-count="380">380</b><span>Tests passing</span></div>
+      <div class="stat"><b data-count="457">457</b><span>Tests passing</span></div>
       <div class="stat"><b data-count="5">5</b><span>Score bands</span></div>
     </div>
   </div>
@@ -384,7 +383,7 @@ footer a:hover{color:var(--primary)}
   <div class="wrap">
     <div class="head reveal">
       <p class="eyebrow">The circuits</p>
-      <h2>Three routes in.<br><em>One honest verdict out.</em></h2>
+      <h2>Two routes in.<br><em>One honest verdict out.</em></h2>
       <p class="lede">Each pipeline runs its own preprocessing and converges on shared
         aggregation, band routing and retention. Same audit row, same caveats, same rules.</p>
     </div>
@@ -415,17 +414,6 @@ footer a:hover{color:var(--primary)}
         <div class="pipe-foot"><span>1 image is a complete observation</span><span class="badge warn">Research checkpoint</span></div>
       </article>
 
-      <article class="card pipe reveal" style="--d:120ms">
-        <div class="pipe-top">
-          <span class="pipe-ico"><svg aria-hidden="true"><use href="#i-audio"/></svg></span>
-          <div><h3>Audio</h3><p class="n">6 stages</p></div>
-        </div>
-        <ul class="steps">
-          <li><i>01</i>Ingest</li><li><i>02</i>Chunk</li><li><i>03</i>Spectrogram</li>
-          <li><i>04</i>Scorer</li><li><i>05</i>Aggregate</li><li><i>06</i>Route</li>
-        </ul>
-        <div class="pipe-foot"><span>Min 3 chunks to score</span><span class="badge stub">Stub — not a real model</span></div>
-      </article>
     </div>
   </div>
 </section>
@@ -523,27 +511,13 @@ footer a:hover{color:var(--primary)}
         <ul class="specs">
           <li><span class="k">Architecture</span><span class="v">tf_efficientnet_b7_ns</span></li>
           <li><span class="k">Parameters</span><span class="v">66,661,404</span></li>
-          <li><span class="k">Input</span><span class="v">380 × 380, ImageNet norm</span></li>
+          <li><span class="k">Input</span><span class="v">457 × 457, ImageNet norm</span></li>
           <li><span class="k">Weights</span><span class="v">DFDC-winner checkpoint</span></li>
           <li><span class="k">Version id</span><span class="v mono">face-tf_efficientnet_b7_ns-9db77ab93188</span></li>
           <li><span class="k">Calibration</span><span class="v">Unfitted — T = 1.0</span></li>
         </ul>
       </article>
 
-      <article class="card model is-stub reveal" style="--d:60ms">
-        <div class="model-top">
-          <span class="avatar"><svg aria-hidden="true"><use href="#i-audio"/></svg></span>
-          <div><h3>Audio model</h3><p class="role">Audio pipeline only</p></div>
-        </div>
-        <span class="badge stub">Placeholder</span>
-        <ul class="specs">
-          <li><span class="k">Architecture</span><span class="v">Deterministic stub scorer</span></li>
-          <li><span class="k">Weights</span><span class="v">None — no checkpoint chosen</span></li>
-          <li><span class="k">Version id</span><span class="v mono">audio-stub-v0</span></li>
-          <li><span class="k">Behaviour</span><span class="v">Fails closed: strongest caveat</span></li>
-          <li><span class="k">Why it ships</span><span class="v">Honest gap beats a face model pointed at audio</span></li>
-        </ul>
-      </article>
     </div>
   </div>
 </section>

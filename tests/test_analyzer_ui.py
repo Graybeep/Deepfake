@@ -171,3 +171,37 @@ def test_undetermined_is_not_described_as_a_clean_result(page):
     undetermined = plain.split("undetermined:", 1)[1]
 
     assert "never analysed" in undetermined or "not the" in undetermined
+
+
+# --- the page must not offer what it cannot do ------------------------------
+
+
+def test_the_uploader_accepts_only_what_the_ui_can_send(page):
+    """`accept` and the media_type the client sends have to agree.
+
+    The client hardcodes `media_type: 'image'`, so a video selected through the
+    picker would be sent as an image, fail to decode, and come back
+    `undetermined` — a confusing non-answer rather than an honest refusal. The
+    file filter is what stops that, so it is pinned here.
+    """
+    assert 'accept="image/*"' in page
+    assert page.count("media_type:") == 1
+    assert "media_type: 'image'" in page
+
+
+def test_video_is_not_promised_in_the_upload_hint(page):
+    """Video genuinely works through the API for short clips, which makes it
+    tempting to advertise. It is not offered here, for measured reasons:
+    `measured: yes` 2026-09-01 on the deployed service, a 10-second 1080p clip
+    (12 sampled frames) took 107 s — past the UI's own 90 s deadline — and took
+    the container down and back twice while doing it. The frame sampler
+    materialises every sampled frame as a PNG at once, so cost scales with
+    resolution as well as length.
+
+    Naming a format the uploader will reject is worse than saying nothing.
+    """
+    hint = page.split('class="hint"', 1)[1].split("</div>", 1)[0].lower()
+
+    for promised in ("mp4", "mov", "video is supported", "videos"):
+        assert promised not in hint, f"upload hint promises {promised!r}"
+    assert "not available" in hint or "photos only" in hint

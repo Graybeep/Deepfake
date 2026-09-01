@@ -774,6 +774,33 @@ against `model_version_id` — the fail-open check this file already says was re
 A document repeating a mechanism that was deleted for being unsafe is how it gets
 rebuilt.
 
+## A literal control character in source is invisible and silent
+`tests/test_no_control_characters.py` fails any tracked source file containing a
+C0 byte other than tab/newline/CR. It exists because a `` written as a regex
+word boundary was interpreted as BACKSPACE (0x08) on its way through a shell
+heredoc, leaving `re.sub(r"<style<BS>.*?</style>", ...)` in the landing page's
+`copy` fixture. That pattern can never match, so the fixture documented as
+returning "only what a reader sees" was returning the whole file -- CSS and
+script included -- for an unknown number of runs.
+
+Why it needs a mechanical guard rather than care: **grep, sed and reading the
+file all render 0x08 as nothing**, so the broken line is visually identical to
+the correct one. It was found only by `inspect.getsource()` on the compiled
+function plus `repr()` per line. Every earlier attempt to inspect it confirmed
+the wrong thing.
+
+The same escape has now been mangled three times here: this fixture, the witness
+regexes in `scripts/mutate.py`, and a `print("
+...")` that became a real
+newline mid-string. Two of the three failed in the PERMISSIVE direction -- the
+check still ran and still passed, just against the wrong text. That is the same
+shape as every other bug this file records.
+
+Note what it did NOT do: the commerce assertions on that fixture are absence
+checks, so running against MORE text than intended made them stricter, not
+weaker. No result was falsely green. The defect was that the fixture's contract
+was false, which the next test written against it would have inherited.
+
 ## Standing practice: prove the test fails first
 Any test written to catch a specific bug must be **shown to go red before the fix is
 in place**. Revert the fix, or disable the mechanism the test leans on, run the test,

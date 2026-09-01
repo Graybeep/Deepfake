@@ -59,8 +59,8 @@ def copy(page: str) -> str:
     up. Both times the substring was real and the claim was not.
     """
     text = re.sub(r"<!--.*?-->", " ", page, flags=re.S)
-    text = re.sub(r"<style.*?</style>", " ", text, flags=re.S)
-    text = re.sub(r"<script.*?</script>", " ", text, flags=re.S)
+    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.S)
+    text = re.sub(r"<script\b.*?</script>", " ", text, flags=re.S)
     return re.sub(r"<[^>]+>", " ", text)
 
 
@@ -144,8 +144,12 @@ def test_the_landing_page_makes_no_forbidden_claim(page, forbidden):
     "not a probability",          # calibration is unfitted
     "Not production-validated",   # the weights have never been validated here
     "Not robust to adversarial",  # the gap, stated rather than hidden
-    "Placeholder",                # audio has no real model
     "Research checkpoint",        # what the face weights actually are
+    # "Placeholder" was here while the page advertised an audio pipeline whose
+    # scorer is a hash. The page no longer offers audio at all, so the caveat
+    # has nothing left to qualify -- removed because the CLAIM went, not because
+    # the caveat became inconvenient. This test failing is what forced the
+    # distinction to be made explicitly rather than silently.
 ])
 def test_the_landing_page_carries_the_caveats_it_must(page, required):
     """The positive control for the test above, and it is not optional.
@@ -256,3 +260,17 @@ def test_the_page_sells_nothing(copy, commercial):
 def test_no_price_figure_appears(copy):
     """Catches "$9", "$19/mo" and friends, which the word list above cannot."""
     assert re.search(r"\$\s?\d", copy) is None
+
+
+def test_audio_is_not_advertised(copy):
+    """The audio pipeline's scorer is a SHA-256 of the input bytes. The page
+    used to present it as a third pipeline with a "stub" badge; it is now not
+    presented at all, because a badge is a caveat and a caveat is only worth
+    having on something a reader can actually reach.
+
+    Guards the count claims too — removing the card while leaving "3 pipelines"
+    standing is exactly the drift this repo keeps rediscovering.
+    """
+    assert "audio" not in copy.lower()
+    assert "three routes" not in copy.lower()
+    assert "2" in copy and "pipelines" in copy.lower()
