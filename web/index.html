@@ -102,7 +102,7 @@
     <label class="drop" id="drop">
       <input type="file" id="file" accept="image/*">
       <div><b>Choose a photo</b> or drop one here</div>
-      <div class="hint">Photos only — JPEG, PNG or HEIC, straight from a phone.
+      <div class="hint">Photos only: JPEG, PNG or HEIC, straight from a phone.
         Video is not available in this build.</div>
     </label>
     <div style="margin-top:14px;display:flex;align-items:center;gap:12px">
@@ -149,15 +149,15 @@ const PLAIN = {
   uncertain:
     'The signals point both ways. This one needs a human to look at it.',
   leaning_manipulated:
-    'Some signs consistent with manipulation — but compression and screenshots ' +
+    'Some signs consistent with manipulation, but compression and screenshots ' +
     'look similar to this detector, so check how the photo was saved before ' +
     'concluding anything.',
   likely_manipulated:
-    'Strong signs consistent with manipulation. Worth a closer look — this is ' +
+    'Strong signs consistent with manipulation. Worth a closer look; this is ' +
     'a reason to check, not a conclusion.',
   undetermined:
     'No face could be read in this file, so nothing was scored. That is not the ' +
-    'same as finding nothing wrong — it means the photo was never analysed.',
+    'same as finding nothing wrong: it means the photo was never analysed.',
 };
 
 // Health is polled and shown, rather than inferred from a stalled upload. A
@@ -293,12 +293,12 @@ function render(d) {
   const rows = [
     ...scored.map(f => `<tr><td>Face ${++n}</td>
       <td><b>${f.score.toFixed(1)}</b></td>
-      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : '—'}</td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : 'n/a'}</td>
       <td>${scored.length + gated.length > 1 ? 'clearest face' : 'scored'}</td></tr>`),
     ...gated.map(f => `<tr class="gated"><td>Face ${++n}</td>
-      <td>—</td>
-      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : '—'}</td>
-      <td>skipped — ${f.relative_to_best === undefined ? 'too weak'
+      <td>n/a</td>
+      <td>${f.face_w ? `${f.face_w}×${f.face_h}` : 'n/a'}</td>
+      <td>skipped: ${f.relative_to_best === undefined ? 'too weak'
         : `${(f.relative_to_best * 100).toFixed(0)}% as strong`}</td></tr>`),
   ].join('');
 
@@ -323,12 +323,12 @@ function render(d) {
       ${worthTable ? `<table><tr><th>face</th><th>score</th><th>size px</th><th></th></tr>
         ${rows}</table>
         ${gated.length ? `<div class="hint">A face detected far less strongly than the
-          clearest one in the photo is skipped rather than scored — usually it is not a
+          clearest one in the photo is skipped rather than scored; usually it is not a
           face, and a made-up number from it would decide the verdict.</div>` : ''}` : ''}
 
       <div class="caution">
         <span>&#9888;</span>
-        <div><b>Early prototype — a rough signal, not proof.</b>
+        <div><b>Early prototype: a rough signal, not proof.</b>
         Screenshots and heavily compressed photos often score high even when genuine.
         The score is not a percentage or a probability.</div>
       </div>
@@ -338,10 +338,10 @@ function render(d) {
         <ul class="adv">${(d.advisories || []).map(a => `<li>${esc(a)}</li>`).join('')}</ul>
         <div class="meta">
           <div><span>score</span>${score === null || score === undefined
-            ? '—' : score.toFixed(4)}</div>
-          <div><span>band</span>${esc(d.band || '—')}</div>
+            ? 'n/a' : score.toFixed(4)}</div>
+          <div><span>band</span>${esc(d.band || 'n/a')}</div>
           <div><span>coverage</span>${d.coverage === null || d.coverage === undefined
-            ? '—' : (d.coverage * 100).toFixed(0) + '%'}
+            ? 'n/a' : (d.coverage * 100).toFixed(0) + '%'}
             ${d.items_total ? ` (${d.item_count}/${d.items_total})` : ''}</div>
           <div><span>trust level</span>${esc(d.model_validation || 'not recorded')}</div>
           <div><span>calibration</span>${esc(d.calibration || 'not recorded')}</div>

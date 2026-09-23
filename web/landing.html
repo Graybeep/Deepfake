@@ -27,7 +27,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Deepfake Detection — Don't trust it. Test it.</title>
+<title>Deepfake Detection: Don't trust it. Test it.</title>
 <meta name="description" content="Forensic analysis for photographs. Per-face evidence, honest caveats, and a score that tells you when it doesn't know.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -392,7 +392,7 @@ footer a:hover{color:var(--primary)}
       <p class="eyebrow">The pipeline</p>
       <h2>Every face checked.<br><em>One honest verdict out.</em></h2>
       <p class="lede">Ingest, face extraction, alignment, scoring, then band routing and
-        retention — every upload takes the same path and lands on the same audit row,
+        retention: every upload takes the same path and lands on the same audit row,
         with the same caveats and the same rules.</p>
     </div>
 
@@ -421,7 +421,7 @@ footer a:hover{color:var(--primary)}
     <div class="head reveal">
       <p class="eyebrow">Measured, not promised</p>
       <h2>Every score lands <em>in a band.</em></h2>
-      <p class="lede">Routing has no undefined input — the five bands partition the whole range.
+      <p class="lede">Routing has no undefined input: the five bands partition the whole range.
         Below is the aggregated score, not a per-frame one, and it is the real output of the
         deployed service on real files.</p>
     </div>
@@ -480,7 +480,7 @@ footer a:hover{color:var(--primary)}
     </div>
     <p class="lede reveal" style="margin-top:var(--space-3);font-size:15px">
       Read that last row before anyone else does. It separates clean images from resampled or
-      recompressed ones — it does <strong>not</strong> separate manipulation from compression.
+      recompressed ones; it does <strong>not</strong> separate manipulation from compression.
       An authentic screenshot outscores a real splice here, which is exactly why the page shows
       you the table instead of a marketing average.
     </p>
@@ -511,7 +511,7 @@ footer a:hover{color:var(--primary)}
           <li><span class="k">Input</span><span class="v">480 × 480, ImageNet norm</span></li>
           <li><span class="k">Weights</span><span class="v">DFDC-winner checkpoint</span></li>
           <li><span class="k">Version id</span><span class="v mono">face-tf_efficientnet_b7_ns-9db77ab93188</span></li>
-          <li><span class="k">Calibration</span><span class="v">Unfitted — T = 1.0</span></li>
+          <li><span class="k">Calibration</span><span class="v">Unfitted (T = 1.0)</span></li>
         </ul>
       </article>
 
@@ -531,7 +531,7 @@ footer a:hover{color:var(--primary)}
     <div class="talk-grid">
       <div class="no reveal"><svg aria-hidden="true"><use href="#i-alert"/></svg>
         <div><b>A score is not a probability</b><p>No temperature has been fitted. A 62 is not
-          "62% likely fake" — it is an uncalibrated model output.</p></div></div>
+          "62% likely fake"; it is an uncalibrated model output.</p></div></div>
       <div class="no reveal" style="--d:60ms"><svg aria-hidden="true"><use href="#i-alert"/></svg>
         <div><b>Not robust to adversarial input</b><p>Scores are manipulable by deliberate
           perturbation. No pre-classifier is built. Documented, not hidden.</p></div></div>
@@ -547,7 +547,7 @@ footer a:hover{color:var(--primary)}
           <em>nothing there</em>.</p></div></div>
       <div class="no reveal" style="--d:300ms"><svg aria-hidden="true"><use href="#i-alert"/></svg>
         <div><b>Not a compliance claim</b><p>Media is deleted on completion and the audit row is
-          retained, which is meaningfully better than nothing — and is not a legal determination
+          retained, which is meaningfully better than nothing, and is not a legal determination
           this codebase gets to make.</p></div></div>
     </div>
   </div>
