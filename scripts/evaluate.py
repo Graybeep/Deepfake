@@ -186,7 +186,7 @@ def summarise(rows: list[dict]) -> str:
     out.append(f"- **{len(rows)} runs** over {len({r['source'] for r in rows})} "
                f"public-domain source photographs and their derived variants.")
     out.append(f"- **Undetermined: {len(undet)}/{len(rows)} "
-               f"({100 * len(undet) / max(1, len(rows)):.0f}%)** — a real photograph of a "
+               f"({100 * len(undet) / max(1, len(rows)):.0f}%)**: a real photograph of a "
                f"real face that came back with nothing scored.")
     if scored:
         vals = [r["score"] for r in scored]
@@ -207,7 +207,7 @@ def summarise(rows: list[dict]) -> str:
             continue
         gs = [r["score"] for r in group if r["score"] is not None]
         nd = sum(1 for r in group if r["band"] == "undetermined")
-        med = f"{statistics.median(gs):.2f}" if gs else "—"
+        med = f"{statistics.median(gs):.2f}" if gs else "n/a"
         out.append(f"| {name} | {len(group)} | {nd} | {med} |")
     out.append("")
 
@@ -230,8 +230,8 @@ def summarise(rows: list[dict]) -> str:
     out.append("| source | variant | band | score | faces | coverage | s |")
     out.append("|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda r: (r["source"], r["variant"])):
-        score = f"{r['score']:.2f}" if r["score"] is not None else "—"
-        cov = f"{r['coverage']:.2f}" if r["coverage"] is not None else "—"
+        score = f"{r['score']:.2f}" if r["score"] is not None else "n/a"
+        cov = f"{r['coverage']:.2f}" if r["coverage"] is not None else "n/a"
         out.append(f"| {r['source']} | {r['variant']} | {r['band']} | {score} | "
                    f"{r['faces_total']} | {cov} | {r['_seconds']} |")
     return "\n".join(out)
@@ -309,7 +309,7 @@ def main() -> int:
             "accuracy, precision or recall can be computed. What it does measure: how\n"
             "often a real face yields no verdict, how known-authentic images score, and\n"
             "what compression and resampling do in isolation. The `composite` rows are\n"
-            "feathered ellipse blends this script builds — a crude local manipulation,\n"
+            "feathered ellipse blends this script builds: a crude local manipulation,\n"
             "a different artefact class from a generative face swap.\n\n"
             "Calibration is unfitted, so no score here is a probability.\n\n"
         )

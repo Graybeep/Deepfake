@@ -17,16 +17,16 @@ public.**
 | `DF_INFERENCE_BACKEND` | `torch` | Real weights; the default is the stub |
 | `DF_FACE_WEIGHTS` | `/models/weights/dfdc_b7_ns_seed111.pth` | Baked into the image |
 | `PORT` | injected by the platform | The launcher reads it; do not hardcode 8000 |
-| `DF_TRUSTED_PROXY_HOPS` | `2` on Railway | Proxies between client and app. **Determine it, do not guess** — see below |
+| `DF_TRUSTED_PROXY_HOPS` | `2` on Railway | Proxies between client and app. **Determine it, do not guess**: see below |
 | `DF_DETECT_MAX_SIDE` | `1600` | Longest side Haar detects on. Crops stay native. 0 disables |
 | `DF_MIN_ITEM_CONFIDENCE` | `0.0` | Absolute aggregation floor. 0 = none, deliberately: 0.30 refused verdicts on ordinary portraits |
 | `DF_DETECT_FALLBACK` | `true` | Retry detection on contrast-enhanced/alternate cascades when the primary finds nothing. 20/23 hard cases -> 23/23 |
 | `DF_MAX_FACES_SCORED` | `5` | Faces scored per item. A 24-face photo crashed the container at 8; 5 is 3/3 clean. Capped faces are reported, not hidden |
 | `DF_INFERENCE_BATCH_SIZE` | `1` | B7 forwards per batch. 2 gave 1/3 on a many-face photo, 1 gave 2/3; combined with the cap, 3/3 |
-| `DF_VIDEO_MAX_FRAMES` | `8` | Frames sampled per video. The sampler holds them ALL in memory at once, so this bounds damage — it does not make video reliable |
+| `DF_VIDEO_MAX_FRAMES` | `8` | Frames sampled per video. The sampler holds them ALL in memory at once, so this bounds damage: it does not make video reliable |
 | `DF_QUEUE_RECLAIM_MS` | `45000` | Must stay BELOW the UI's 90 s deadline, or an orphaned job recovers after the page has already given up |
 
-`DF_AUDIO_WEIGHTS` stays unset — audio has no checkpoint and falls back to the
+`DF_AUDIO_WEIGHTS` stays unset: audio has no checkpoint and falls back to the
 stub, which is the documented mixed state and fails closed.
 
 ## Deploys are manual
@@ -43,7 +43,7 @@ DOES restart the container -- faster than a build, but still a restart.
 
 ## Determining `DF_TRUSTED_PROXY_HOPS`
 
-Get this wrong and rate limiting silently does nothing — no error, no warning,
+Get this wrong and rate limiting silently does nothing: no error, no warning,
 just 201s forever. It happened here twice: first at the default 0 (socket peer,
 which is a rotating proxy), then at a guessed 1.
 
@@ -57,7 +57,7 @@ socket peer, and the forwarding headers actually received:
 
 Count the entries in `x-forwarded-for` that were added by infrastructure and set
 hops so `identity` lands on the real client. On Railway the header is
-`<client>, <edge>` — the edge appends its **own** address — so the answer is 2,
+`<client>, <edge>` (the edge appends its **own** address), so the answer is 2,
 not the 1 you would guess from "there is one proxy".
 
 Verify with a burst: 45 rapid `POST /v1/jobs` should produce 429s.
@@ -77,9 +77,9 @@ its own bucket, which is worse than no limiting because it looks like protection
 | Steady state | 0.32 s/face at 8 threads |
 
 **≥2 GB RAM.** Below that the container OOMs during model load, which in a
-platform log looks identical to a crash. **Do not take 0.5 vCPU** — the 0.32 s
-figure is on 8 threads, so a fractional core is a 4–16× cut and puts a single
-face at 1.5–3 s.
+platform log looks identical to a crash. **Do not take 0.5 vCPU**: the 0.32 s
+figure is on 8 threads, so a fractional core is a 4-16× cut and puts a single
+face at 1.5-3 s.
 
 **Images only.** Video sampling is 12 frames × faces each; on CPU that is
 minutes per clip, not seconds.
@@ -93,7 +93,7 @@ The job flow is asynchronous, so nothing blocks on the model warming and a fast
 200 is correct for the gateway itself. But that same property means a dead
 inference worker is invisible from the gateway: the platform sees a healthy
 service, the gateway accepts the upload, the job lands in Redis, and nothing ever
-picks it up. No error, no failed status, no red anything — a client watching a
+picks it up. No error, no failed status, no red anything: a client watching a
 spinner forever, looking exactly like a model thinking hard.
 
 Two layers, covering different failures. Both verified against a running
@@ -108,7 +108,7 @@ Workers refresh a Redis key with a 45 s TTL on every poll (~5 s). `/healthz`
 returns 503 when a required worker's key has expired, and the platform's restart
 policy takes it from there.
 
-**A 150 s boot grace** tolerates missing heartbeats at startup — workers take
+**A 150 s boot grace** tolerates missing heartbeats at startup: workers take
 seconds to appear and the inference worker loads a 254 MB model first. Without it
 the first health check fails and the deploy is rolled back before anything had a
 chance to start. Degraded workers are still *named* in the body during the grace,
@@ -120,7 +120,7 @@ must not be able to roll back a deploy.
 
 ### Memory, per process
 
-`measured: yes` inside the running container — and this answers whether the model
+`measured: yes` inside the running container, and this answers whether the model
 is loaded more than once. It is not:
 
 | Process | RSS |
@@ -132,7 +132,7 @@ is loaded more than once. It is not:
 | cpu_preprocess | 39 MB |
 | **idle total** | **~880 MB** |
 
-A 1–2 face upload peaks around 1.1–1.3 GB, so a 2 GB tier holds. 4 GB is
+A 1-2 face upload peaks around 1.1-1.3 GB, so a 2 GB tier holds. 4 GB is
 comfortable. An 8 × 800px batch peaked at 1541 MB in the worker alone, so do not
 size on the idle figure.
 
@@ -148,7 +148,7 @@ size on the idle figure.
 - **Per-service scaling.** The GPU worker is the cost driver and the thing worth
   scaling alone. Here it scales with everything or not at all.
 - **The presigned-upload property.** With S3/MinIO the browser POSTs straight to
-  storage and the bytes never traverse the gateway — which is why the
+  storage and the bytes never traverse the gateway, which is why the
   `content-length-range` policy condition is the only place the size cap can be
   enforced there. On local disk the grant points back at `POST /v1/uploads` and
   the cap is enforced by that endpoint, streaming and aborting mid-read. A
@@ -159,8 +159,8 @@ size on the idle figure.
 The container filesystem is wiped on redeploy while Postgres rows survive, so
 job rows will reference media that no longer exists.
 
-That is survivable **only because the evidence display reads from Postgres** —
-scores, per-face confidences, discarded detections — and never re-reads the
+That is survivable **only because the evidence display reads from Postgres**
+(scores, per-face confidences, discarded detections) and never re-reads the
 uploaded image. Tier 1 deletes the media on completion anyway, and
 `media_deleted` already models exactly this. If a UI is ever changed to
 re-render the uploaded file, a redeploy mid-demo will empty the screen.
@@ -173,7 +173,7 @@ warm-up. Reference them as `${{Postgres.DATABASE_URL}}` / `${{Redis.REDIS_URL}}`
 rather than pasting connection strings, so a rotated credential does not silently
 break the app.
 
-Note the internal Redis URL is `redis://`, **not** `rediss://` — private
+Note the internal Redis URL is `redis://`, **not** `rediss://`: private
 networking, no TLS termination to negotiate. The `rediss://` requirement applies
 to Upstash, not to this.
 
@@ -201,7 +201,7 @@ redeploy. `DF_PUBLIC_BASE_URL` needs the URL from `railway domain`, so it cannot
 be set before the first deploy.
 
 **Expect a slow first deploy.** The build context carries ~254MB of weights (a
-build-time fetch was tried and reverted — see `Dockerfile`), and
+build-time fetch was tried and reverted; see `Dockerfile`), and
 the image is 3.3GB.
 
 ### Things that behave differently than on localhost
@@ -211,8 +211,8 @@ the image is 3.3GB.
   that 502s, which is indistinguishable from a crash. *(Verified: reads `PORT`,
   binds `0.0.0.0`.)*
 - **Health check vs warm-up.** `/healthz` answers as soon as uvicorn binds, which
-  is ~6s before the model finishes warming. That is deliberate — the queue
-  absorbs a job submitted in that window — but it means healthy does not mean
+  is ~6s before the model finishes warming. That is deliberate (the queue
+  absorbs a job submitted in that window), but it means healthy does not mean
   warm. `healthcheckTimeout` is 300s so a slow boot is not killed mid-load.
 - **Neon needs SSL, and has two endpoints.** Use the **direct** endpoint for
   migrations and the **pooled** one for the app. Five processes each opening a
@@ -237,7 +237,7 @@ after, on the same image:
 **`os.cpu_count()` reports the HOST's cores inside a container, not the cgroup
 quota.** torch sized its thread pool for cores it did not have, and those threads
 contended over a 2-core allocation. A single image took nearly four minutes,
-which for a demo is indistinguishable from broken — and nothing in the logs says
+which for a demo is indistinguishable from broken, and nothing in the logs says
 "too many threads", it just runs slowly and looks like a big model on a small
 machine.
 
@@ -247,7 +247,7 @@ Three details that matter if you touch this:
   `OMP_NUM_THREADS` at import; setting it afterwards in the child does nothing.
   That is why it lives in the launcher and not in the worker.
 - `cpu_quota()` returns `None` on a real host, where there is no quota, and
-  `usable_threads()` then falls back to `os.cpu_count()` — correct outside a
+  `usable_threads()` then falls back to `os.cpu_count()`, correct outside a
   container.
 - Existing values are respected (`setdefault`), so deliberate operator tuning
   is not overruled.

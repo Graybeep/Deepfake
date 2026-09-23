@@ -7,7 +7,7 @@ public-domain photograph, so there are no labelled deepfakes here and no
 accuracy, precision or recall can be computed. What it does measure: how
 often a real face yields no verdict, how known-authentic images score, and
 what compression and resampling do in isolation. The `composite` rows are
-feathered ellipse blends this script builds — a crude local manipulation,
+feathered ellipse blends this script builds: a crude local manipulation,
 a different artefact class from a generative face swap.
 
 Calibration is unfitted, so no score here is a probability.
@@ -15,7 +15,7 @@ Calibration is unfitted, so no score here is a probability.
 ## What was measured
 
 - **30 runs** over 9 public-domain source photographs and their derived variants.
-- **Undetermined: 6/30 (20%)** — a real photograph of a real face that came back with nothing scored.
+- **Undetermined: 6/30 (20%)**: a real photograph of a real face that came back with nothing scored.
 - Scores on the 24 that were scored: min 0.65, median 1.91, max 92.28.
 
 ### Undetermined rate by variant
@@ -44,11 +44,11 @@ Every non-composite source here is a public-domain photograph, so any high score
 
 | source | variant | band | score | faces | coverage | s |
 |---|---|---|---|---|---|---|
-| anthony | jpeg_q40 | undetermined | — | 1 | 0.00 | 1.96 |
+| anthony | jpeg_q40 | undetermined | n/a | 1 | 0.00 | 1.96 |
 | anthony | jpeg_q70 | leaning_authentic | 27.00 | 1 | 1.00 | 1.43 |
-| anthony | original | undetermined | — | 0 | — | 2.26 |
-| anthony | resize_50 | undetermined | — | 0 | — | 3.11 |
-| anthony | screenshot_sim | undetermined | — | 0 | — | 3.57 |
+| anthony | original | undetermined | n/a | 0 | n/a | 2.26 |
+| anthony | resize_50 | undetermined | n/a | 0 | n/a | 3.11 |
+| anthony | screenshot_sim | undetermined | n/a | 0 | n/a | 3.57 |
 | anthony+curie | composite | likely_authentic | 5.24 | 1 | 1.00 | 2.5 |
 | curie | jpeg_q40 | likely_authentic | 1.85 | 1 | 1.00 | 2.93 |
 | curie | jpeg_q70 | likely_authentic | 1.57 | 1 | 1.00 | 2.15 |
@@ -67,8 +67,8 @@ Every non-composite source here is a public-domain photograph, so any high score
 | einstein | resize_50 | likely_authentic | 0.74 | 1 | 1.00 | 3.72 |
 | einstein | screenshot_sim | likely_authentic | 0.65 | 1 | 1.00 | 3.09 |
 | group | screenshot_sim | likely_manipulated | 92.28 | 4 | 1.00 | 5.84 |
-| tesla | original | undetermined | — | 2 | 0.00 | 5.22 |
-| tesla | resize_50 | undetermined | — | 1 | 0.00 | 3.37 |
+| tesla | original | undetermined | n/a | 2 | 0.00 | 5.22 |
+| tesla | resize_50 | undetermined | n/a | 1 | 0.00 | 3.37 |
 | twain | jpeg_q40 | likely_authentic | 1.51 | 1 | 1.00 | 3.51 |
 | twain | jpeg_q70 | likely_authentic | 1.32 | 1 | 1.00 | 3.39 |
 | twain | original | likely_authentic | 1.54 | 1 | 1.00 | 3.8 |

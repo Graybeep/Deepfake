@@ -8,38 +8,38 @@ what was assumed in its place.
 
 ## Resolved by CLAUDE.md
 
-### 1. The score band gaps — RESOLVED
+### 1. The score band gaps: RESOLVED
 
 CLAUDE.md now specifies that bands are a total partition and how each gap
 behaves. Implemented as:
 
-- **20–40** (`leaning_authentic`) auto-clears like `<20`. No flag, no window.
+- **20-40** (`leaning_authentic`) auto-clears like `<20`. No flag, no window.
   Being wrong here means a probably-real item gets deleted on schedule.
-- **60–80** (`leaning_manipulated`) gets the same DB-flag-plus-alert pattern as
-  40–60, at **low urgency**. It sits next to the `>80` threshold whose
+- **60-80** (`leaning_manipulated`) gets the same DB-flag-plus-alert pattern as
+  40-60, at **low urgency**. It sits next to the `>80` threshold whose
   calibration is not trusted enough to show as a raw percentage, so it must
   never pass silently into normal deletion. It still deletes on the normal
-  schedule and does **not** open the extended retention window — the flag is the
+  schedule and does **not** open the extended retention window: the flag is the
   record that it happened.
 
 `ReviewUrgency` (`none` / `low` / `normal`) carries this through to
 `review_flags.urgency` and into the alert, so on-call can tell a low-urgency
-60–80 flag apart from a 40–60 or `>80` one.
+60-80 flag apart from a 40-60 or `>80` one.
 
 Where: `src/df/bands.py`, `tests/test_bands.py`.
 
-### 2. Extended retention window scope — RESOLVED, reversing my earlier assumption
+### 2. Extended retention window scope: RESOLVED, reversing my earlier assumption
 
 I had assumed record-only. CLAUDE.md is explicit that the window protects **the
-flagged media itself — specifically the face crop(s) that drove the score, not
-the full raw source** — because the row and per-item scores are already retained
+flagged media itself (specifically the face crop(s) that drove the score, not
+the full raw source**), because the row and per-item scores are already retained
 for every job regardless of band, so a record-only window would leave the `>80`
 branch with nothing a dispute could use.
 
 Implemented as:
 
 - On a `>80` verdict the router copies the driving crops to `cold/<job_id>/`
-  **before** the Tier 1 delete runs. Ordering is load-bearing — reversed, the
+  **before** the Tier 1 delete runs. Ordering is load-bearing: reversed, the
   window would open over crops deleted a moment earlier.
 - "Driving" = the items that survived confidence-dropping and trimming
   (`AggregationResult.used_items`), resolved to storage keys via
@@ -47,7 +47,7 @@ Implemented as:
   naming convention, so a layout change can't silently preserve nothing.
 - The raw source is still deleted on completion for every band. Tier 1 is
   unchanged.
-- A third delete path now exists — cold-storage expiry — and it carries the same
+- A third delete path now exists (cold-storage expiry), and it carries the same
   unconditional hold-flag check as the other two.
 
 **Audio:** CLAUDE.md says "face crop(s)". For audio there are no faces, so the
@@ -62,7 +62,7 @@ Where: `src/df/retention.py`, `src/df/workers/router.py`,
 
 ---
 
-## Answered 2026-08-29 — and neither was answered as asked
+## Answered 2026-08-29, and neither was answered as asked
 
 Both of these were put up as a choice between three reductions. Both came back
 with the same objection, which was the right one: **picking between three lossy
@@ -76,17 +76,17 @@ schema change or a contract break.
 
 **The blocker underneath both is the same, and it is not a missing decision.**
 There is no labelled validation data in this repository, and the only scores
-this system has ever produced come from `_hash_score` — a SHA-256 of the input
-bytes mapped onto 0–100, explicitly uncorrelated with whether the input was
+this system has ever produced come from `_hash_score`: a SHA-256 of the input
+bytes mapped onto 0-100, explicitly uncorrelated with whether the input was
 manipulated. So there is no score distribution to fit a per-size-bucket
 threshold against, and none to derive a video floor from either. Both questions
 reduce to "we need weights and a labelled held-out set", which is the same
 dependency the calibration work has been blocked on all along.
 
-### 3. Worst-case multi-face rollup — kept as the aggregator, demoted as the label
+### 3. Worst-case multi-face rollup: kept as the aggregator, demoted as the label
 
 CLAUDE.md flags this one itself: >1 face rolls up to worst-case severity, "a
-default, not fixed — confirm before anything downstream assumes otherwise."
+default, not fixed: confirm before anything downstream assumes otherwise."
 
 **Implemented as:** highest manipulation score across faces wins; the rolled-up
 item keeps the confidence of the face that *set* the score, so a worst case
@@ -97,7 +97,7 @@ strength. Individual face scores are still stored in `job_items`.
 the whole video `manipulated`.
 
 **Resolved by making the reduction non-exclusive rather than by replacing it.**
-Worst-case stays as the aggregator — it is the conservative default and the
+Worst-case stays as the aggregator: it is the conservative default and the
 false-positive cost is a review flag, not a deletion. What changed is that it is
 no longer the only artifact: `face_evidence` on a completed video/image result
 reports `faces_total`, how many carry geometry, and the top faces by score with
@@ -107,7 +107,7 @@ problem. The uninformative flag was.
 
 **What is deliberately NOT built: a per-face threshold.** The better rule is a
 bar that varies with face size and quality, fitted so the false-positive rate is
-flat across size buckets rather than flat across scores — plus an N-correction
+flat across size buckets rather than flat across scores: plus an N-correction
 (Šidák or similar) on the per-face bar, which removes most crowd false positives
 while preserving worst-case semantics. None of it can be fitted here. Adding an
 invented per-face constant to make the field look finished would bake a *second*
@@ -122,7 +122,7 @@ bucketing feature would have had to be regenerated from scratch. Migration 006
 adds `job_items.face_w` / `face_h` and the workers now carry them through.
 
 Absolute pixels only. Relative-to-frame area is the better feature and remains
-unavailable, because source frame dimensions are not recorded anywhere either —
+unavailable, because source frame dimensions are not recorded anywhere either;
 flagged rather than approximated, since a threshold fitted against a fabricated
 feature is worse than no threshold.
 
@@ -133,7 +133,7 @@ Where: `src/df/rollup.py` (`face_evidence`), `migrations/006`,
 `src/df/workers/cpu_preprocess.py`, `src/df/gateway/app.py`,
 `tests/test_coverage_and_evidence.py`.
 
-### 4. Minimum items before a verdict — split by modality, and made non-load-bearing
+### 4. Minimum items before a verdict: split by modality, and made non-load-bearing
 
 **Was:** fewer than 3 usable items ⇒ `undetermined`, for every modality.
 
@@ -151,8 +151,8 @@ real distinction, not a concession: an image is a complete observation of its
 subject, while a video frame is one sample from a distribution over frames. A
 rule about sampling variance should not apply to something that was not sampled.
 
-The image path already behaved this way — `aggregate_identity` never consulted
-the floor at all — but it recorded `min_items_for_score: 3` on every image job.
+The image path already behaved this way (`aggregate_identity` never consulted
+the floor at all), but it recorded `min_items_for_score: 3` on every image job.
 So the audit row asserted a parameter that had not governed the result, which is
 the row claiming a rule the code did not run. That was the part that was
 actually wrong, and it is fixed.
@@ -167,7 +167,7 @@ authority of having been written down.
 
 **What would change this again:** if usable-item filtering turns out to be
 strict enough that sub-threshold media is genuinely unscoreable rather than
-merely noisy — a 2-frame verdict near-random rather than just wide — then
+merely noisy (a 2-frame verdict near-random rather than just wide), then
 abstaining is right and the fix belongs upstream in what counts as usable, not
 in this constant.
 
@@ -185,10 +185,10 @@ pipeline can be built and tested; it reports `is_real_detector=False` and
 declares `validation=placeholder`. Switch to `torch` once weights exist.
 
 **CORRECTED.** This used to say the API "attaches a placeholder advisory to any
-result carrying a stub model id" — i.e. it matched the substring `stub` against
+result carrying a stub model id", i.e. it matched the substring `stub` against
 `model_version_id`. That failed **open**. Loading a real checkpoint changes the
 id to `face-efficientnet_b4-<hash>`, the substring vanishes, and every caveat
-disappears silently — at exactly the moment scores start looking plausible
+disappears silently: at exactly the moment scores start looking plausible
 enough to be believed.
 
 The advisory is now derived from `ModelVersion.validation`, a required field
@@ -210,7 +210,7 @@ confidence through instead of the model's.
 retries it; if the result write had failed after deletion, the inputs needed to
 reproduce it would already be gone.
 
-**Redis Streams, not lists — REVERSED 2026-08-16.** This originally read "Redis
+**Redis Streams, not lists. REVERSED 2026-08-16.** This originally read "Redis
 lists, not Streams; Streams consumer groups are week 2+ per CLAUDE.md". Streams
 is now the default (`DF_QUEUE_BACKEND=streams`) and lists are kept only as a
 rollback path; both write the same `q:<topic>:dead` list, so there is one place
@@ -219,11 +219,11 @@ to look either way.
 What the reversal buys: any live consumer can reclaim a message whose worker
 stopped without acking it, once idle past `DF_QUEUE_RECLAIM_MS` (XAUTOCLAIM). So
 recovery no longer requires a worker restart, and a topic can have more than one
-consumer — which is what makes the GPU worker horizontally scalable. Under
+consumer, which is what makes the GPU worker horizontally scalable. Under
 lists, a message stranded while all workers stayed up was invisible until the
 retention sweeper caught the job hours later.
 
-`measured: yes` — `scripts/verify_queue.py`, which must run inside a container:
+`measured: yes`: `scripts/verify_queue.py`, which must run inside a container:
 Redis is on the internal network, and publishing a host port to test it would
 weaken the isolation being tested.
 
@@ -231,26 +231,26 @@ weaken the isolation being tested.
 logic needs to be readable by anyone reviewing it. Revisit if it starts churning.
 
 **Rate-limit identity is API key, else client IP.** Behind a proxy this must read
-a *trusted* forwarded-for header or every request buckets to the proxy — wire
+a *trusted* forwarded-for header or every request buckets to the proxy: wire
 that with the ingress config; `identity_of()` carries the note.
 
 ---
 
-## Tier 3 — deferred, and visible in the product
+## Tier 3: deferred, and visible in the product
 
 Per CLAUDE.md these are marked, not half-built:
 
-- **Adversarial-input pre-classifier — not built.** Scores are manipulable by
+- **Adversarial-input pre-classifier: not built.** Scores are manipulable by
   adversarial perturbation. Every API result carries an advisory saying so.
-- **Human-in-the-loop dashboard — not built.** Substitute is the `review_flags`
+- **Human-in-the-loop dashboard: not built.** Substitute is the `review_flags`
   table plus a Slack/email alert (`src/df/notify.py`). The DB row is written
   first and a failed notification never loses the flag.
-- **AV scanning — not built.** Substitute is container isolation, and per
+- **AV scanning: not built.** Substitute is container isolation, and per
   CLAUDE.md it ships in the same phase as the CPU worker: `internal: true`
   network with no route off the host, `read_only`, `cap_drop: ALL`,
   `no-new-privileges`, non-root, pid and memory caps.
 
-## 5. A labelled held-out set for calibration — assessed 2026-08-29
+## 5. A labelled held-out set for calibration: assessed 2026-08-29
 
 Calibration, the score bands, the per-face size threshold and the video
 minimum-items floor are four open questions with **one** shared dependency: a
@@ -267,7 +267,7 @@ the state of the field, and it means this step cannot be automated away.
 A calibration set must be **held out from the model's training data**. Ours is
 the DFDC-winner B7, trained on DFDC. Fitting a temperature on data the model
 memorised produces a confident-looking, well-calibrated-looking number that is
-wrong in deployment — and unlike a licence problem, nothing downstream would
+wrong in deployment, and unlike a licence problem, nothing downstream would
 ever surface it. So "clean licence, undocumented provenance" is not a
 half-acceptable compromise here, it is disqualifying: if the provenance is
 unknown, overlap with DFDC cannot be ruled out.
@@ -280,13 +280,13 @@ The second eliminator is **task match**. The model detects face manipulation in
 video frames. A temperature fitted on text-to-image synthetic pictures is fitted
 for a distribution the model was never meant to score.
 
-### Recommended: Deepfake-Eval-2024 — with one blocking question
+### Recommended: Deepfake-Eval-2024, with one blocking question
 
 - Licence **CC-BY-SA-4.0**, which permits commercial use with attribution and
   share-alike. That alone makes it the only serious candidate found.
 - 44h video, 56.5h audio, 1,975 images. 88 sources, 52 languages, **manually
   labelled**, covering faceswap, lipsync and diffusion.
-- Collected **in the wild in 2024**, so overlap with DFDC (2019–20 paid actors)
+- Collected **in the wild in 2024**, so overlap with DFDC (2019-20 paid actors)
   is not merely unlikely, it is chronologically impossible. It is also far closer
   to deployment distribution than any academic set.
 - Purpose-built as an evaluation benchmark, which is exactly what a held-out
@@ -294,7 +294,7 @@ for a distribution the model was never meant to score.
 
 **BLOCKER, and it must be resolved before use, not after.** The terms as
 summarised on the dataset card include *"use only for evaluation purposes, not
-training"*. Temperature scaling fits a parameter on the data — a one-parameter
+training"*. Temperature scaling fits a parameter on the data: a one-parameter
 logistic regression. Whether post-hoc calibration counts as "training" under
 those terms is genuinely ambiguous, and it is not this repository's call to
 decide. Ask the authors directly; it is one email with a definitive answer, and
@@ -317,21 +317,21 @@ Selected over Deepfake-Eval-2024 because it needs no new licence decision and no
 question answered by a third party. Corrected in the same breath, because the
 first version of this entry was imprecise about which split:
 
-**Not the Kaggle `test_videos` folder.** That is 400 videos with **no labels** —
+**Not the Kaggle `test_videos` folder.** That is 400 videos with **no labels**:
 withholding ground truth is how the leaderboard worked, so there is nothing to
 fit against. The earlier phrasing "the DFDC public test set" pointed at exactly
 the wrong artefact.
 
 **The official validation split from the AWS portal**: 4,000 clips, 50% fake,
 shipped with `metadata.json` giving REAL/FAKE per clip. The property that makes
-it usable is stronger than clip-disjointness — it uses 214 subjects, **none of
+it usable is stronger than clip-disjointness: it uses 214 subjects, **none of
 which appear in the training set**. A different clip of the same actor would leak
 an identity the weights have already seen; subject-disjoint rules that out.
 `measured: no (source)` <https://arxiv.org/abs/2006.07397> ·
 <https://ai.meta.com/datasets/dfdc/>
 
 Note on the licence, since a secondary source claimed otherwise: Meta's dataset
-page and the DFDC paper are **both silent** on licence terms — no licence text,
+page and the DFDC paper are **both silent** on licence terms: no licence text,
 no commercial-use statement. That confirms CLAUDE.md's existing characterisation
 ("terms are not published on the dataset page") rather than the third-party claim
 that DFDC is "released under a non-commercial license", which is not supported by
@@ -346,7 +346,7 @@ is the one remaining blocker.
 
 Still the better dataset on distribution, and still the right long-term answer.
 It is not chosen now only because its terms say "evaluation only, not training"
-and fitting a temperature fits a parameter — a question only its authors can
+and fitting a temperature fits a parameter: a question only its authors can
 settle. Revisit if the DFDC route stalls, or once that answer arrives.
 
 **The cost of choosing DFDC instead is distributional, not legal, and it is
@@ -357,22 +357,22 @@ number is.
 
 ### Rejected, with reasons and sources
 
-- **Celeb-DF v2** — non-commercial research only, with an explicit undertaking
+- **Celeb-DF v2**: non-commercial research only, with an explicit undertaking
   not to "exploit any portion of the videos or any derived data for any
   purpose". A fitted temperature is derived data. Same blocker as FF++.
   `measured: no (source)`
   <https://github.com/yuezunli/celeb-deepfakeforensics>
-- **DF40**, **DeepfakeBench**, **SynthForensics** — all CC BY-NC-4.0.
+- **DF40**, **DeepfakeBench**, **SynthForensics**: all CC BY-NC-4.0.
   Non-commercial, as CLAUDE.md already recorded for DeepfakeBench.
   <https://github.com/YZY-stack/DF40> · <https://github.com/SCLBD/DeepfakeBench>
-- **prithivMLmods HuggingFace sets** (`Deepfake-vs-Real-60K` and siblings) —
-  Apache-2.0, and **zero provenance**. The card names two "curated subsets" and
+- **prithivMLmods HuggingFace sets** (`Deepfake-vs-Real-60K` and siblings):
+Apache-2.0, and **zero provenance**. The card names two "curated subsets" and
   never says where the images came from, what generated the fakes, or which
   datasets they derive from. Overlap with DFDC is unknowable, which is fatal per
-  the section above. Clean licence, unverifiable data — the exact trade CLAUDE.md
+  the section above. Clean licence, unverifiable data: the exact trade CLAUDE.md
   already refused for checkpoints.
   <https://huggingface.co/datasets/prithivMLmods/Deepfake-vs-Real-60K>
-- **OpenFake** — fails twice. Subsets from proprietary generators are
+- **OpenFake**: fails twice. Subsets from proprietary generators are
   non-commercial under provider non-compete clauses, and the content is
   AI-generated imagery broadly (Midjourney, Imagen, Stable Diffusion), not face
   manipulation. Wrong task.
@@ -397,11 +397,11 @@ should be read every time the number is.
 
 Repeated from CLAUDE.md because it is easy to drift on:
 
-- Not "adversarial robustness" — not built.
-- Not "legal hold" — it is a fixed-timer **extended retention window** that
+- Not "adversarial robustness": not built.
+- Not "legal hold": it is a fixed-timer **extended retention window** that
   auto-expires, including mid-dispute.
-- Not "production-validated calibration" — launch snapshot only, and the
+- Not "production-validated calibration": launch snapshot only, and the
   temperatures are not yet fitted (both currently `T=1.0`, i.e. uncalibrated).
-- Not "BIPA/GDPR compliant" — partial deletion plus a partial audit trail is
+- Not "BIPA/GDPR compliant": partial deletion plus a partial audit trail is
   meaningfully better than nothing, but compliance is a legal determination this
   codebase does not get to assert.

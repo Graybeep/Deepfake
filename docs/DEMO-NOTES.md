@@ -13,7 +13,7 @@ do not:
 
 - ~~"Treat the scores as an ordering, not probabilities."~~ **False, by our own
   numbers.** The highest score in the table (69.53) belongs to an *authentic*
-  photo — a screenshot. The actual manipulation scored lower (62.08). The
+  photo: a screenshot. The actual manipulation scored lower (62.08). The
   ordering is wrong, so any claim resting on it dies the moment someone reads
   the table.
 - ~~"It separates clean images from degraded ones."~~ **Over-general.** The
@@ -35,19 +35,19 @@ outputs, not probabilities. A "62" is not "62% likely fake".
 | spliced face | leaning_manipulated | 62.08 | 3.6 s |
 | **screenshot of a face** | **leaning_manipulated** | **69.53** | 2.1 s |
 
-Clean and blurred cluster at 0.3–2.7. Recompressed and spliced cluster at 62–70.
+Clean and blurred cluster at 0.3-2.7. Recompressed and spliced cluster at 62-70.
 Nothing lands in between, which is why the separation claim holds and the
 ordering claim does not.
 
 The spliced image is a feathered-ellipse composite of two public-domain
-portraits — **not** a GAN deepfake. It is a different artifact class from the
+portraits: **not** a GAN deepfake. It is a different artifact class from the
 model's training data. It shows the pipeline responds to manipulation; it is not
 an accuracy claim.
 
 ## Demo order: show the screenshot case yourself
 
 After their own selfie, the next thing anyone reaches for is an image off the
-web — downscaled, recompressed, the same artifact profile as the screenshot
+web: downscaled, recompressed, the same artifact profile as the screenshot
 case. Two of the first three uploads can land in that bucket.
 
 So **run it deliberately, before anyone asks.** Naming the limitation and
@@ -62,17 +62,17 @@ verdict."*
 
 ## Suggested sequence
 
-1. **Clean portrait** — 0.54, `likely_authentic`. Read the headline and the
+1. **Clean portrait**: 0.54, `likely_authentic`. Read the headline and the
    scale: "no signs" at 0 and "strong signs" at 100, with the score pinned. The
-   per-face table is deliberately absent here — with one face it only restated
+   per-face table is deliberately absent here: with one face it only restated
    the headline. Open **Technical details** to show the three advisories, the
    trust level and the weights hash sitting behind the plain answer.
-2. **Screenshot** — 69.53, `leaning_manipulated`. Name the limitation first.
-3. **Spliced face** — 62.08. The manipulation case.
-4. **Group photo** — 6 faces, one verdict via worst-case rollup, 5.5 s. This
+2. **Screenshot**: 69.53, `leaning_manipulated`. Name the limitation first.
+3. **Spliced face**: 62.08. The manipulation case.
+4. **Group photo**: 6 faces, one verdict via worst-case rollup, 5.5 s. This
    is where the per-face table appears, and where a skipped detection reads as
-   "skipped — 31% as strong" rather than a raw confidence number.
-5. `/healthz` — worker liveness, if anyone asks how you know it is up.
+   "skipped: 31% as strong" rather than a raw confidence number.
+5. `/healthz`: worker liveness, if anyone asks how you know it is up.
 
 ## Things that are true and worth saying
 
@@ -90,7 +90,7 @@ verdict."*
 
 ## Rate limiting: fixed and verified on the deployed service
 
-It was effectively disabled earlier tonight — the limiter keyed on the socket
+It was effectively disabled earlier tonight: the limiter keyed on the socket
 peer, which behind Railway is a rotating proxy pool, so 45 rapid requests spread
 across 20+ near-fresh buckets and never limited anything.
 
@@ -99,15 +99,15 @@ Now keyed on the real client via `DF_TRUSTED_PROXY_HOPS=2`. `measured: yes`
 
 - 45 rapid `POST /v1/jobs` → **first 429 at request 42**, `Retry-After: 2`.
   42 is the arithmetic: capacity 30, plus ~12 refilled at 0.5/s during the burst.
-- A client sending `X-Forwarded-For: 1.2.3.4, 5.6.7.8, 9.9.9.9` is **ignored** —
-  identity still resolves to its real address, so nobody can pick their own
+- A client sending `X-Forwarded-For: 1.2.3.4, 5.6.7.8, 9.9.9.9` is **ignored**:
+identity still resolves to its real address, so nobody can pick their own
   bucket.
 
-**Why 2 and not 1:** Railway's `X-Forwarded-For` is `<client>, <edge>` — the edge
+**Why 2 and not 1:** Railway's `X-Forwarded-For` is `<client>, <edge>`: the edge
 appends its *own* address, and that address rotates too. One hop bucketed on the
 rotating edge; two hops reaches the client. `GET /v1/whoami` shows the resolved
 identity and the headers behind it, which is how this was determined rather than
-guessed — the first guess was wrong and failed silently.
+guessed: the first guess was wrong and failed silently.
 
 ## If asked about audio or video
 
@@ -140,20 +140,20 @@ watching."
 | test | outcome |
 |---|---|
 | 4 s @ 720p, 8 frames | clean, all 8 scored, coverage 1.0, 15.4 s |
-| 20 s @ 720p, 40 frames | `gpu-inference exited with -9` — OOM |
+| 20 s @ 720p, 40 frames | `gpu-inference exited with -9`: OOM |
 | 10 s @ 1080p, 12 frames | 107 s, container down and back twice |
 | **same 20 s clip, 3 runs, 8-frame cap** | **201 s never finished / 53 s crashed-then-recovered / 4.2 s clean** |
-| same clip, 5 runs, **after** streaming the frames | **3/5 clean** — 54.5 s crashed / 4.6 / 4.1 / 4.1 clean / 99.4 s crashed |
-| same clip, 5 runs, after removing the PNG round trip too | **3/5 clean** — the round trip was 32% of the *time*, none of the memory |
+| same clip, 5 runs, **after** streaming the frames | **3/5 clean**: 54.5 s crashed / 4.6 / 4.1 / 4.1 clean / 99.4 s crashed |
+| same clip, 5 runs, after removing the PNG round trip too | **3/5 clean**: the round trip was 32% of the *time*, none of the memory |
 | **container memory limit** | **1000 MB** (`measured: yes`, read from the cgroup at boot) |
 
 Three identical requests, three different outcomes. Lowering
 `DF_VIDEO_MAX_FRAMES` from 300 to 12 to 8 did not make it deterministic, because
-frame count is not the variable — accumulated container memory is. That is why
+frame count is not the variable: accumulated container memory is. That is why
 "short clips work" would have been the wrong thing to claim.
 
 **Why it cannot be fixed in code:** `cv2.VideoCapture.read()` alone, retaining
-nothing, peaks at 123.4 MB on a 1080p file — against 21.7 MB for twenty face
+nothing, peaks at 123.4 MB on a 1080p file: against 21.7 MB for twenty face
 extractions. The memory is inside OpenCV's decoder. `BUFFERSIZE=1` changes
 nothing (122.9 MB) and seeking to each sampled frame is slightly worse (127.0 MB,
 though 24% faster). Five processes share 1000 MB and one of them holds a B7, so
@@ -172,18 +172,18 @@ kills the service mid-demo does not.
 
 ## Known, not a problem tomorrow: slow jobs get delivered twice
 
-`measured: yes` — the first audio job after a deploy was reclaimed:
+`measured: yes`: the first audio job after a deploy was reclaimed:
 
     WARNING df.queue reclaimed topic=inference job=8269d576... delivery=2
     -- previous consumer stopped without acking
 
 librosa JIT-compiles on first use, the message went unacked past the idle
 timeout, and another consumer reclaimed it. It completed on the retry, so the
-reclaim path did its job — but the mechanism is **generic, not an audio bug**:
+reclaim path did its job, but the mechanism is **generic, not an audio bug**:
 any job slower than `DF_QUEUE_RECLAIM_MS` is processed twice. Audio only
 surfaced it.
 
-Tomorrow's margin is fine — the slowest measured demo case is the 6-face group
+Tomorrow's margin is fine: the slowest measured demo case is the 6-face group
 photo at 5.5 s, far inside the timeout, and the face model is warmed at boot.
 Not worth a deploy tonight. Worth knowing it exists.
 
@@ -203,7 +203,7 @@ fix:
 |---|---|---|
 | 12.2 MP | 85 s, container SIGKILLed, `undetermined` | 8.8 s, **container stayed up** |
 | 8.4 MP real photo | (never got a verdict) | `likely_authentic` 1.3357, 1 face 516x516 |
-| 1.2 MP baseline | 0.7898, 523x523 | 0.7898, 523x523 — **unchanged** |
+| 1.2 MP baseline | 0.7898, 523x523 | 0.7898, 523x523: **unchanged** |
 
 The small-image path is untouched, which is the check that matters for the score
 table above: it is below the cap, so the numbers in it still stand.
@@ -217,7 +217,7 @@ detections, two dropped, each recorded with why:
 
 `DF_QUEUE_RECLAIM_MS` was also lowered 120000 -> 45000. The UI gives up at 90 s
 and the queue could not reclaim an orphaned job until 120 s, so recovery was
-structurally unable to reach the person watching — a job that did complete came
+structurally unable to reach the person watching: a job that did complete came
 back 30 s after the page had already said "timed out". Both are env vars, so
 either can be retuned on the running deployment without a rebuild.
 
@@ -239,7 +239,7 @@ That last row is the habit. Across every test tonight the failure was the FIRST
 job after a container restart; once warm, the same input runs clean repeatedly.
 Upload one photo before anyone is watching.
 
-**What "capped" means if it comes up:** the response separates three counts —
+**What "capped" means if it comes up:** the response separates three counts:
 faces *scored*, faces *capped* (skipped to bound cost, never examined), and
 detections *discarded* (judged not to be faces by the confidence gate). A capped
 face could in principle be the manipulated one, which is why the count is in the
@@ -252,7 +252,7 @@ response instead of being quietly dropped.
   The deploy above was taken deliberately, before the demo, because the phone
   path was broken; that reason is now spent.
 - Do not quote a score as a probability or a percentage.
-- Do not call it "production-validated" or "adversarially robust" — neither is
+- Do not call it "production-validated" or "adversarially robust": neither is
   built, and both are on the forbidden list in CLAUDE.md.
 
 ## Before presenting
